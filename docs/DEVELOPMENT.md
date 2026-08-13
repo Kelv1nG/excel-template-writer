@@ -1,0 +1,91 @@
+# Development
+
+## Status
+
+The repository has an executable Phase 0 language model: lexer, expression and directive parsers, spatial linker, validator, typed AST, safe evaluator, and pure layout planner. The `.xlsx` adapter is intentionally not implemented yet.
+
+## Runtime and package management
+
+- Target CPython 3.12.
+- Use `uv` for the environment, dependency management, lockfile, and project commands.
+- `.python-version` pins the requested interpreter line for local tooling.
+
+Manage packages with:
+
+```powershell
+uv python install 3.12
+uv sync
+uv add <package>
+uv add --dev <development-package>
+uv remove <package>
+uv run <command>
+```
+
+Commit both `pyproject.toml` and `uv.lock`. Do not use direct `pip install` commands to change the project environment or maintain a parallel dependency list.
+
+The selected quality tools are:
+
+- `pytest` for tests;
+- Ruff for linting and formatting;
+- `ty` for static type checking.
+
+Run the complete local gate with:
+
+```powershell
+uv run pytest
+uv run ruff check src tests
+uv run ruff format --check src tests
+uv run ty check
+```
+
+## Before changing the project
+
+1. Read `SPEC.md` for the relevant contract.
+2. Read `AGENTS.md` for repository-wide constraints.
+3. Use the language-semantics skill for changes that affect template meaning or layout.
+4. Use the XLSX-integration skill for changes that affect actual workbook files.
+5. Use both when a feature spans the interpreter and workbook adapter.
+
+## Package boundaries
+
+Preserve these responsibilities:
+
+- workbook reader and immutable workbook model;
+- cell lexer and expression/directive parser;
+- spatial marker linker and semantic validator;
+- AST and safe evaluator;
+- pure layout planner and render-plan IR;
+- `openpyxl` workbook writer;
+- structured diagnostics.
+
+The interpreter and layout layers must be testable without opening or saving an `.xlsx` file.
+
+## Testing layers
+
+- Language unit tests: tokens, grammar, expressions, scopes, AST, and diagnostics.
+- Spatial tests: rectangle pairing, containment, ambiguity, nesting, measurement, shifting, and collisions.
+- Workbook integration tests: typed cells, styles, dimensions, merged ranges, and save/reload integrity.
+- End-to-end fixtures: only for representative user-visible behavior spanning all layers.
+
+Prefer small semantic assertions over whole-workbook binary comparisons. Each invalid case should assert its stable diagnostic code and source location.
+
+## XLSX fixtures
+
+- Give each fixture one narrow purpose.
+- Keep source templates separate from generated outputs.
+- Generate programmatic fixtures through a documented helper once a test package exists.
+- Do not manually patch binary workbook contents.
+- Reopen rendered workbooks and verify values, types, styles, dimensions, and merges.
+- Inspect OOXML parts only when the public workbook model cannot prove the behavior.
+
+## Definition of done
+
+A change is complete when:
+
+- behavior agrees with `SPEC.md`;
+- architecture boundaries remain intact;
+- valid, invalid, empty, boundary, and nesting cases are covered where relevant;
+- workbook changes pass save/reload checks;
+- supported checks run through `uv run`;
+- limitations and unsupported behavior fail explicitly or are documented.
+

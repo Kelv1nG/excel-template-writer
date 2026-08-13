@@ -1,0 +1,4 @@
+interface:
+  display_name: "XLSX Integration Change"
+  short_description: "Safely change workbook input and output"
+  default_prompt: "Use $xlsx-integration-change to design and implement this workbook integration change."

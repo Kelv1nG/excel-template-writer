@@ -1,0 +1,4 @@
+interface:
+  display_name: "Language Semantics Change"
+  short_description: "Safely evolve template syntax and behavior"
+  default_prompt: "Use $language-semantics-change to design and implement this template-language change."
