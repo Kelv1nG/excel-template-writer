@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date, datetime, time
 from decimal import Decimal
 from pathlib import Path
+from zipfile import ZipFile
 
 import pytest
 from openpyxl import Workbook, load_workbook
@@ -17,6 +19,7 @@ from excel_template_writer.diagnostics import (
     TemplateCompilationError,
     TemplateRenderError,
 )
+from excel_template_writer.limits import ResourceLimits
 from excel_template_writer.values import TypeAdapter
 from excel_template_writer.xlsx import render_workbook
 
@@ -24,6 +27,11 @@ from excel_template_writer.xlsx import render_workbook
 def _save(workbook: Workbook, path: Path) -> Path:
     workbook.save(path)
     return path
+
+
+def _uncompressed_size(path: Path) -> int:
+    with ZipFile(path) as archive:
+        return sum(member.file_size for member in archive.infolist())
 
 
 def test_render_workbook_normalizes_adapter_values_once_for_all_sheets(
@@ -525,4 +533,109 @@ def test_rejects_noncanonical_context_before_writing(tmp_path: Path) -> None:
         DiagnosticCode.UNORDERED_CONTEXT_COLLECTION
     ]
     assert str(caught.value.diagnostics[0].location) == "context.items"
+    assert not output_path.exists()
+
+
+def test_rejects_input_package_over_configured_file_limit(tmp_path: Path) -> None:
+    template_path = tmp_path / "template.xlsx"
+    output_path = tmp_path / "should-not-exist.xlsx"
+    workbook = Workbook()
+    workbook.active["A1"] = "Static"
+    _save(workbook, template_path)
+
+    with pytest.raises(TemplateCompilationError) as caught:
+        render_workbook(
+            template_path,
+            output_path,
+            {},
+            limits=ResourceLimits(max_xlsx_file_bytes=1),
+        )
+
+    assert [diagnostic.code for diagnostic in caught.value.diagnostics] == [
+        DiagnosticCode.XLSX_PACKAGE_LIMIT_EXCEEDED
+    ]
+    assert not output_path.exists()
+
+
+def test_rejects_input_package_over_configured_member_limit(tmp_path: Path) -> None:
+    template_path = tmp_path / "template.xlsx"
+    output_path = tmp_path / "should-not-exist.xlsx"
+    workbook = Workbook()
+    _save(workbook, template_path)
+
+    with pytest.raises(TemplateCompilationError) as caught:
+        render_workbook(
+            template_path,
+            output_path,
+            {},
+            limits=ResourceLimits(max_xlsx_archive_members=1),
+        )
+
+    assert [diagnostic.code for diagnostic in caught.value.diagnostics] == [
+        DiagnosticCode.XLSX_PACKAGE_LIMIT_EXCEEDED
+    ]
+    assert not output_path.exists()
+
+
+def test_rejects_workbook_over_configured_sheet_limit(tmp_path: Path) -> None:
+    template_path = tmp_path / "template.xlsx"
+    output_path = tmp_path / "should-not-exist.xlsx"
+    workbook = Workbook()
+    workbook.create_sheet("Second")
+    _save(workbook, template_path)
+
+    with pytest.raises(TemplateCompilationError) as caught:
+        render_workbook(
+            template_path,
+            output_path,
+            {},
+            limits=ResourceLimits(max_worksheets=1),
+        )
+
+    assert [diagnostic.code for diagnostic in caught.value.diagnostics] == [
+        DiagnosticCode.WORKSHEET_COUNT_LIMIT_EXCEEDED
+    ]
+    assert not output_path.exists()
+
+
+def test_rejects_workbook_wide_planned_cell_limit(tmp_path: Path) -> None:
+    template_path = tmp_path / "template.xlsx"
+    output_path = tmp_path / "should-not-exist.xlsx"
+    workbook = Workbook()
+    workbook.active["A1"] = "First"
+    workbook.create_sheet("Second")["A1"] = "Second"
+    _save(workbook, template_path)
+
+    with pytest.raises(TemplateRenderError) as caught:
+        render_workbook(
+            template_path,
+            output_path,
+            {},
+            limits=ResourceLimits(max_planned_cells_per_workbook=1),
+        )
+
+    assert [diagnostic.code for diagnostic in caught.value.diagnostics] == [
+        DiagnosticCode.RENDER_RESOURCE_LIMIT_EXCEEDED
+    ]
+    assert not output_path.exists()
+
+
+def test_rejects_oversized_temporary_output_before_publication(tmp_path: Path) -> None:
+    template_path = tmp_path / "template.xlsx"
+    output_path = tmp_path / "should-not-exist.xlsx"
+    workbook = Workbook()
+    workbook.active["A1"] = "{% for item in items %}{{ item }}{% endfor %}"
+    _save(workbook, template_path)
+    limits = replace(
+        ResourceLimits(),
+        max_xlsx_uncompressed_bytes=_uncompressed_size(template_path) + 5_000,
+    )
+    values = [f"row-{index:03d}-" + ("x" * 500) for index in range(100)]
+
+    with pytest.raises(TemplateRenderError) as caught:
+        render_workbook(template_path, output_path, {"items": values}, limits=limits)
+
+    assert [diagnostic.code for diagnostic in caught.value.diagnostics] == [
+        DiagnosticCode.XLSX_PACKAGE_LIMIT_EXCEEDED
+    ]
     assert not output_path.exists()

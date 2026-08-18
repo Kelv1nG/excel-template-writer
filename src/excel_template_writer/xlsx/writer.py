@@ -13,6 +13,8 @@ from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.dimensions import ColumnDimension, RowDimension
 from openpyxl.worksheet.worksheet import Worksheet
 
+from excel_template_writer.diagnostics import TemplateRenderError
+from excel_template_writer.limits import ResourceLimits
 from excel_template_writer.render import RenderPlan
 from excel_template_writer.xlsx.model import (
     CellPresentation,
@@ -22,6 +24,7 @@ from excel_template_writer.xlsx.model import (
     SheetSnapshot,
     WorkbookSnapshot,
 )
+from excel_template_writer.xlsx.package_limits import inspect_xlsx_package
 
 
 def _apply_dimension_style(
@@ -124,6 +127,8 @@ def write_workbook(
     snapshot: WorkbookSnapshot,
     plans: tuple[RenderPlan, ...],
     output_path: str | Path,
+    *,
+    limits: ResourceLimits,
 ) -> Path:
     """Write atomically and reopen the serialized package before publishing it."""
 
@@ -142,6 +147,13 @@ def write_workbook(
     temporary_path = Path(temporary_name)
     try:
         workbook.save(temporary_path)
+        package_diagnostic = inspect_xlsx_package(
+            temporary_path,
+            limits,
+            description="rendered XLSX package",
+        )
+        if package_diagnostic is not None:
+            raise TemplateRenderError((package_diagnostic,))
         verified = load_workbook(temporary_path, read_only=True, data_only=False)
         verified.close()
         os.replace(temporary_path, path)

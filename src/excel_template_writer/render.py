@@ -26,9 +26,15 @@ from excel_template_writer.expressions import (
     MissingValueError,
     evaluate_expression,
 )
+from excel_template_writer.limits import (
+    DEFAULT_RESOURCE_LIMITS,
+    XLSX_MAX_CELL_TEXT_LENGTH,
+    XLSX_MAX_COLUMNS,
+    XLSX_MAX_ROWS,
+    ResourceLimits,
+)
 from excel_template_writer.model import Coordinate, Rectangle
 from excel_template_writer.values import (
-    NormalizedContext,
     TypeAdapter,
     is_collection_value,
     is_ordered_collection,
@@ -91,10 +97,18 @@ class _Block:
 _EVALUATION_FAILED = object()
 
 
+class _ResourceLimitExceeded(Exception):
+    def __init__(self, diagnostic: Diagnostic) -> None:
+        self.diagnostic = diagnostic
+        super().__init__(str(diagnostic))
+
+
 class _Renderer:
-    def __init__(self, compiled: CompiledSheet) -> None:
+    def __init__(self, compiled: CompiledSheet, limits: ResourceLimits) -> None:
         self.compiled = compiled
+        self.limits = limits
         self.diagnostics: list[Diagnostic] = []
+        self.repeat_iterations = 0
 
     def diagnostic(
         self,
@@ -103,6 +117,56 @@ class _Renderer:
         location: SourceLocation,
     ) -> None:
         self.diagnostics.append(Diagnostic(code, message, location))
+
+    def resource_limit(
+        self,
+        code: DiagnosticCode,
+        message: str,
+        location: SourceLocation,
+    ) -> None:
+        raise _ResourceLimitExceeded(Diagnostic(code, message, location))
+
+    def check_block_limits(
+        self,
+        *,
+        cells: int,
+        height: int,
+        location: SourceLocation,
+        width: int,
+    ) -> None:
+        if cells > self.limits.max_planned_cells_per_sheet:
+            self.resource_limit(
+                DiagnosticCode.RENDER_RESOURCE_LIMIT_EXCEEDED,
+                "rendered block exceeds "
+                f"max_planned_cells_per_sheet={self.limits.max_planned_cells_per_sheet:,}",
+                location,
+            )
+        if height > self.limits.max_output_rows_per_sheet:
+            self.resource_limit(
+                DiagnosticCode.RENDER_RESOURCE_LIMIT_EXCEEDED,
+                "rendered block exceeds "
+                f"max_output_rows_per_sheet={self.limits.max_output_rows_per_sheet:,}",
+                location,
+            )
+        if width > self.limits.max_output_columns_per_sheet:
+            self.resource_limit(
+                DiagnosticCode.RENDER_RESOURCE_LIMIT_EXCEEDED,
+                "rendered block exceeds "
+                f"max_output_columns_per_sheet={self.limits.max_output_columns_per_sheet:,}",
+                location,
+            )
+        if height > XLSX_MAX_ROWS:
+            self.resource_limit(
+                DiagnosticCode.XLSX_GRID_LIMIT_EXCEEDED,
+                f"rendered block exceeds the XLSX row limit of {XLSX_MAX_ROWS:,}",
+                location,
+            )
+        if width > XLSX_MAX_COLUMNS:
+            self.resource_limit(
+                DiagnosticCode.XLSX_GRID_LIMIT_EXCEEDED,
+                f"rendered block exceeds the XLSX column limit of {XLSX_MAX_COLUMNS:,}",
+                location,
+            )
 
     def render_cell(
         self,
@@ -151,6 +215,12 @@ class _Renderer:
             value = values[0]
         else:
             value = "".join("" if item is None else str(item) for item in values)
+        if isinstance(value, str) and len(value) > XLSX_MAX_CELL_TEXT_LENGTH:
+            self.resource_limit(
+                DiagnosticCode.CELL_TEXT_LIMIT_EXCEEDED,
+                f"cell text exceeds the XLSX limit of {XLSX_MAX_CELL_TEXT_LENGTH:,} characters",
+                SourceLocation(self.compiled.template.name, cell.coordinate.a1),
+            )
         return PlannedCell(cell.coordinate, value, cell.coordinate, path)
 
     def evaluate_region_expression(
@@ -301,6 +371,15 @@ class _Renderer:
         missing_roots: frozenset[str],
         path: tuple[int, ...],
     ) -> _Block:
+        self.check_block_limits(
+            cells=0,
+            height=rectangle.height,
+            width=rectangle.width,
+            location=SourceLocation(
+                self.compiled.template.name,
+                Coordinate(rectangle.top, rectangle.left).a1,
+            ),
+        )
         grid: dict[Coordinate, PlannedCell] = {}
         rows = {
             local_row: PlannedRow(
@@ -393,6 +472,15 @@ class _Renderer:
                 height = max(height, child_top + child.height - 1)
         height = max(height, max((coordinate.row for coordinate in grid), default=0))
         height = max(height, max(rows, default=0))
+        self.check_block_limits(
+            cells=len(grid),
+            height=height,
+            width=rectangle.width,
+            location=SourceLocation(
+                self.compiled.template.name,
+                Coordinate(rectangle.top, rectangle.left).a1,
+            ),
+        )
         for destination_row in range(1, height + 1):
             rows.setdefault(destination_row, PlannedRow(destination_row, None, path))
         return _Block(grid, rows, merges, max(0, height), rectangle.width)
@@ -417,30 +505,47 @@ class _Renderer:
                 items = []
             else:
                 items = list(raw_items)
+            iterations = max(1, len(items))
+            self.repeat_iterations += iterations
+            if self.repeat_iterations > self.limits.max_repeat_iterations_per_sheet:
+                self.resource_limit(
+                    DiagnosticCode.RENDER_RESOURCE_LIMIT_EXCEEDED,
+                    "worksheet exceeds max_repeat_iterations_per_sheet="
+                    f"{self.limits.max_repeat_iterations_per_sheet:,}",
+                    node.span.location,
+                )
             blocks: list[_Block] = []
+            rendered_cells = 0
+            rendered_height = 0
             if items:
                 for index, item in enumerate(items):
                     child_scope = dict(scope)
                     child_scope[node.variable] = item
-                    blocks.append(
-                        self.render_area(
-                            node.rectangle,
-                            node.children,
-                            child_scope,
-                            missing_roots,
-                            (*path, index),
-                        )
-                    )
-            else:
-                blocks.append(
-                    self.render_area(
+                    block = self.render_area(
                         node.rectangle,
                         node.children,
-                        scope,
-                        missing_roots | {node.variable},
-                        (*path, -1),
+                        child_scope,
+                        missing_roots,
+                        (*path, index),
                     )
+                    blocks.append(block)
+                    rendered_cells += len(block.cells)
+                    rendered_height += block.height
+                    self.check_block_limits(
+                        cells=rendered_cells,
+                        height=rendered_height,
+                        width=node.rectangle.width,
+                        location=node.span.location,
+                    )
+            else:
+                block = self.render_area(
+                    node.rectangle,
+                    node.children,
+                    scope,
+                    missing_roots | {node.variable},
+                    (*path, -1),
                 )
+                blocks.append(block)
             grid: dict[Coordinate, PlannedCell] = {}
             rows: dict[int, PlannedRow] = {}
             merges: list[PlannedMerge] = []
@@ -480,24 +585,24 @@ def render_sheet(
     context: object,
     *,
     adapters: Iterable[TypeAdapter[Any]] = (),
+    limits: ResourceLimits = DEFAULT_RESOURCE_LIMITS,
 ) -> RenderResult:
     """Evaluate a compiled sheet into an adapter-neutral destination-cell plan."""
 
-    if isinstance(context, NormalizedContext):
-        normalized_context = context
-    else:
-        normalization = normalize_context(context, adapters=adapters)
-        if normalization.context is None:
-            return RenderResult(None, normalization.diagnostics)
-        normalized_context = normalization.context
-    renderer = _Renderer(compiled)
-    block = renderer.render_area(
-        compiled.rectangle,
-        compiled.children,
-        normalized_context,
-        frozenset(),
-        (),
-    )
+    normalization = normalize_context(context, adapters=adapters, limits=limits)
+    if normalization.context is None:
+        return RenderResult(None, normalization.diagnostics)
+    renderer = _Renderer(compiled, limits)
+    try:
+        block = renderer.render_area(
+            compiled.rectangle,
+            compiled.children,
+            normalization.context,
+            frozenset(),
+            (),
+        )
+    except _ResourceLimitExceeded as error:
+        return RenderResult(None, (error.diagnostic,))
     if renderer.diagnostics:
         return RenderResult(None, tuple(renderer.diagnostics))
     cells = tuple(cell for _, cell in sorted(block.cells.items()))

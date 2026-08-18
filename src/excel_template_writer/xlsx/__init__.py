@@ -13,9 +13,12 @@ from excel_template_writer.diagnostics import (
     DiagnosticCode,
     SourceLocation,
     TemplateCompilationError,
+    TemplateRenderError,
 )
+from excel_template_writer.limits import DEFAULT_RESOURCE_LIMITS, ResourceLimits
 from excel_template_writer.render import RenderPlan, render_sheet
 from excel_template_writer.values import TypeAdapter, normalize_context
+from excel_template_writer.xlsx.package_limits import inspect_xlsx_package
 from excel_template_writer.xlsx.reader import read_workbook
 from excel_template_writer.xlsx.validation import validate_sheet_features
 from excel_template_writer.xlsx.writer import write_workbook
@@ -33,6 +36,7 @@ def render_workbook(
     context: object,
     *,
     adapters: Iterable[TypeAdapter[Any]] = (),
+    limits: ResourceLimits = DEFAULT_RESOURCE_LIMITS,
 ) -> WorkbookRenderResult:
     """Compile and plan all sheets before atomically writing a separate XLSX file."""
 
@@ -63,20 +67,62 @@ def render_workbook(
             )
         )
 
-    normalized_context = normalize_context(context, adapters=adapters).require()
+    package_diagnostic = inspect_xlsx_package(
+        source_path,
+        limits,
+        description="input XLSX package",
+    )
+    if package_diagnostic is not None:
+        raise TemplateCompilationError((package_diagnostic,))
+
+    normalized_context = normalize_context(
+        context,
+        adapters=adapters,
+        limits=limits,
+    ).require()
 
     snapshot = read_workbook(source_path)
+    if len(snapshot.sheets) > limits.max_worksheets:
+        raise TemplateCompilationError(
+            (
+                Diagnostic(
+                    DiagnosticCode.WORKSHEET_COUNT_LIMIT_EXCEEDED,
+                    f"workbook exceeds max_worksheets={limits.max_worksheets:,}",
+                    SourceLocation("<workbook>", "A1"),
+                ),
+            )
+        )
     plans: list[RenderPlan] = []
     diagnostics: list[Diagnostic] = []
+    planned_cells = 0
+    resource_codes = {
+        DiagnosticCode.RENDER_RESOURCE_LIMIT_EXCEEDED,
+        DiagnosticCode.XLSX_GRID_LIMIT_EXCEEDED,
+        DiagnosticCode.CELL_TEXT_LIMIT_EXCEEDED,
+    }
     for sheet in snapshot.sheets:
         compilation = compile_sheet(sheet.template)
         if compilation.compiled is None:
             diagnostics.extend(compilation.diagnostics)
             continue
-        rendering = render_sheet(compilation.compiled, normalized_context)
+        rendering = render_sheet(compilation.compiled, normalized_context, limits=limits)
         if rendering.plan is None:
+            if any(diagnostic.code in resource_codes for diagnostic in rendering.diagnostics):
+                raise TemplateRenderError(rendering.diagnostics)
             diagnostics.extend(rendering.diagnostics)
             continue
+        planned_cells += len(rendering.plan.cells)
+        if planned_cells > limits.max_planned_cells_per_workbook:
+            raise TemplateRenderError(
+                (
+                    Diagnostic(
+                        DiagnosticCode.RENDER_RESOURCE_LIMIT_EXCEEDED,
+                        "workbook exceeds max_planned_cells_per_workbook="
+                        f"{limits.max_planned_cells_per_workbook:,}",
+                        SourceLocation(sheet.template.name, "A1"),
+                    ),
+                )
+            )
         diagnostics.extend(validate_sheet_features(sheet, compilation.compiled, rendering.plan))
         plans.append(rendering.plan)
     if diagnostics:
@@ -84,7 +130,12 @@ def render_workbook(
     if len(plans) != len(snapshot.sheets):
         raise RuntimeError("internal error: not every worksheet produced a render plan")
 
-    written_path = write_workbook(snapshot, tuple(plans), destination_path)
+    written_path = write_workbook(
+        snapshot,
+        tuple(plans),
+        destination_path,
+        limits=limits,
+    )
     return WorkbookRenderResult(written_path, ())
 
 

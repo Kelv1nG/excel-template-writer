@@ -16,6 +16,7 @@ from excel_template_writer.diagnostics import (
     DiagnosticCode,
     TemplateRenderError,
 )
+from excel_template_writer.limits import DEFAULT_RESOURCE_LIMITS, ResourceLimits
 
 type ScalarValue = str | bool | int | float | Decimal | date | datetime | time | None
 type InputValue = ScalarValue | Mapping[str, InputValue] | list[InputValue] | tuple[InputValue, ...]
@@ -23,20 +24,40 @@ type CanonicalValue = ScalarValue | Mapping[str, CanonicalValue] | tuple[Canonic
 type CanonicalContext = Mapping[str, CanonicalValue]
 
 
+@dataclass(frozen=True, slots=True)
+class ContextStatistics:
+    """Summary measurements retained with an immutable normalized context."""
+
+    nodes: int
+    maximum_depth: int
+    maximum_container_items: int
+    maximum_string_length: int
+
+
 class NormalizedContext(Mapping[str, CanonicalValue]):
     """An immutable context produced by :func:`normalize_context`."""
 
-    __slots__ = ("_data",)
+    __slots__ = ("_data", "_statistics")
     _data: Mapping[str, CanonicalValue]
+    _statistics: ContextStatistics
 
     def __init__(self) -> None:
         raise TypeError("NormalizedContext values are created by normalize_context()")
 
     @classmethod
-    def _create(cls, values: Mapping[str, CanonicalValue]) -> NormalizedContext:
+    def _create(
+        cls,
+        values: Mapping[str, CanonicalValue],
+        statistics: ContextStatistics,
+    ) -> NormalizedContext:
         instance = object.__new__(cls)
         object.__setattr__(instance, "_data", MappingProxyType(dict(values)))
+        object.__setattr__(instance, "_statistics", statistics)
         return instance
+
+    @property
+    def statistics(self) -> ContextStatistics:
+        return self._statistics
 
     def __getitem__(self, key: str) -> CanonicalValue:
         return self._data[key]
@@ -106,6 +127,7 @@ class _Slot:
 class _Visit:
     value: object
     path: str
+    depth: int
     ancestors: tuple[object, ...]
     adapter_chain: frozenset[type[object]]
     target: _Slot
@@ -125,6 +147,25 @@ class _BuildSequence:
 
 
 type _Action = _Visit | _BuildMapping | _BuildSequence
+
+
+@dataclass(slots=True)
+class _NormalizationState:
+    limits: ResourceLimits
+    nodes: int = 0
+    maximum_depth: int = 0
+    maximum_container_items: int = 0
+    maximum_string_length: int = 0
+    limit_exceeded: bool = False
+
+    @property
+    def statistics(self) -> ContextStatistics:
+        return ContextStatistics(
+            self.nodes,
+            self.maximum_depth,
+            self.maximum_container_items,
+            self.maximum_string_length,
+        )
 
 
 def _diagnostic(code: DiagnosticCode, message: str, path: str) -> Diagnostic:
@@ -153,6 +194,90 @@ def _is_timezone_aware(value: datetime | time) -> bool:
 
 def _is_ancestor(value: object, ancestors: tuple[object, ...]) -> bool:
     return any(value is ancestor for ancestor in ancestors)
+
+
+def _is_canonical_runtime_type(value: object) -> bool:
+    return value is None or isinstance(
+        value,
+        (str, bool, int, float, Decimal, date, time, Mapping, list, tuple),
+    )
+
+
+def _record_resource_use(
+    action: _Visit,
+    diagnostics: list[Diagnostic],
+    state: _NormalizationState,
+) -> bool:
+    value = action.value
+    state.nodes += 1
+    state.maximum_depth = max(state.maximum_depth, action.depth)
+    if state.nodes > state.limits.max_context_nodes:
+        message = f"canonical context exceeds max_context_nodes={state.limits.max_context_nodes:,}"
+    elif action.depth > state.limits.max_context_depth:
+        message = f"canonical context exceeds max_context_depth={state.limits.max_context_depth:,}"
+    elif isinstance(value, str):
+        size = len(value)
+        state.maximum_string_length = max(state.maximum_string_length, size)
+        if size <= state.limits.max_input_string_length:
+            return False
+        message = (
+            f"input string exceeds max_input_string_length={state.limits.max_input_string_length:,}"
+        )
+    elif isinstance(value, (Mapping, list, tuple)):
+        size = len(value)
+        state.maximum_container_items = max(state.maximum_container_items, size)
+        if size <= state.limits.max_container_items:
+            return False
+        message = f"container exceeds max_container_items={state.limits.max_container_items:,}"
+    else:
+        return False
+
+    diagnostics.append(
+        _diagnostic(
+            DiagnosticCode.CONTEXT_RESOURCE_LIMIT_EXCEEDED,
+            message,
+            action.path,
+        )
+    )
+    state.limit_exceeded = True
+    action.target.value = _INVALID
+    return True
+
+
+def _statistics_limit_diagnostic(
+    statistics: ContextStatistics,
+    limits: ResourceLimits,
+) -> Diagnostic | None:
+    checks = (
+        (
+            statistics.nodes,
+            limits.max_context_nodes,
+            "max_context_nodes",
+        ),
+        (
+            statistics.maximum_depth,
+            limits.max_context_depth,
+            "max_context_depth",
+        ),
+        (
+            statistics.maximum_container_items,
+            limits.max_container_items,
+            "max_container_items",
+        ),
+        (
+            statistics.maximum_string_length,
+            limits.max_input_string_length,
+            "max_input_string_length",
+        ),
+    )
+    for actual, allowed, name in checks:
+        if actual > allowed:
+            return _diagnostic(
+                DiagnosticCode.CONTEXT_RESOURCE_LIMIT_EXCEEDED,
+                f"normalized context measurement {actual:,} exceeds {name}={allowed:,}",
+                "context",
+            )
+    return None
 
 
 def _duplicate_adapter_diagnostics(
@@ -216,6 +341,7 @@ def _visit_mapping(
             _Visit(
                 item,
                 _key_path(action.path, key),
+                action.depth + 1,
                 next_ancestors,
                 frozenset(),
                 child,
@@ -261,6 +387,7 @@ def _visit_sequence(
         _Visit(
             item,
             f"{action.path}[{index}]",
+            action.depth + 1,
             next_ancestors,
             frozenset(),
             entries[index],
@@ -290,8 +417,12 @@ def _visit_value(
     actions: list[_Action],
     diagnostics: list[Diagnostic],
     adapters: tuple[TypeAdapter[Any], ...],
+    state: _NormalizationState,
 ) -> None:
     value = action.value
+
+    if _is_canonical_runtime_type(value) and _record_resource_use(action, diagnostics, state):
+        return
 
     if value is None or isinstance(value, (str, bool, int)):
         action.target.value = value
@@ -420,6 +551,7 @@ def _visit_value(
         _Visit(
             converted,
             action.path,
+            action.depth,
             (*action.ancestors, value),
             action.adapter_chain | {adapter.source_type},
             action.target,
@@ -431,6 +563,7 @@ def normalize_context(
     context: object,
     *,
     adapters: Iterable[TypeAdapter[Any]] = (),
+    limits: ResourceLimits = DEFAULT_RESOURCE_LIMITS,
 ) -> NormalizationResult:
     """Adapt and immutably normalize a complete render context."""
 
@@ -447,13 +580,21 @@ def normalize_context(
         return NormalizationResult(None, tuple(diagnostics))
     if diagnostics:
         return NormalizationResult(None, tuple(diagnostics))
+    if isinstance(context, NormalizedContext):
+        limit_diagnostic = _statistics_limit_diagnostic(context.statistics, limits)
+        if limit_diagnostic is not None:
+            return NormalizationResult(None, (limit_diagnostic,))
+        return NormalizationResult(context, ())
 
     root = _Slot()
-    actions: list[_Action] = [_Visit(context, "context", (), frozenset(), root)]
+    state = _NormalizationState(limits)
+    actions: list[_Action] = [_Visit(context, "context", 0, (), frozenset(), root)]
     while actions:
         action = actions.pop()
         if isinstance(action, _Visit):
-            _visit_value(action, actions, diagnostics, configured_adapters)
+            _visit_value(action, actions, diagnostics, configured_adapters, state)
+            if state.limit_exceeded:
+                break
         elif isinstance(action, _BuildMapping):
             _build_mapping(action)
         else:
@@ -464,15 +605,22 @@ def normalize_context(
     if root.value is _UNSET or root.value is _INVALID or not isinstance(root.value, Mapping):
         raise AssertionError("valid mapping normalization did not produce a mapping")
     return NormalizationResult(
-        NormalizedContext._create(cast(Mapping[str, CanonicalValue], root.value)),
+        NormalizedContext._create(
+            cast(Mapping[str, CanonicalValue], root.value),
+            state.statistics,
+        ),
         (),
     )
 
 
-def validate_context(context: object) -> tuple[Diagnostic, ...]:
+def validate_context(
+    context: object,
+    *,
+    limits: ResourceLimits = DEFAULT_RESOURCE_LIMITS,
+) -> tuple[Diagnostic, ...]:
     """Validate a value tree using the canonical no-adapter boundary."""
 
-    return normalize_context(context).diagnostics
+    return normalize_context(context, limits=limits).diagnostics
 
 
 def is_collection_value(value: object) -> bool:
@@ -490,6 +638,7 @@ def is_ordered_collection(value: object) -> bool:
 __all__ = [
     "CanonicalContext",
     "CanonicalValue",
+    "ContextStatistics",
     "InputValue",
     "NormalizationResult",
     "NormalizedContext",
