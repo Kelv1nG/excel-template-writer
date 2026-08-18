@@ -11,6 +11,7 @@ from datetime import date
 from decimal import Decimal
 
 from excel_template_writer import (
+    ResourceLimits,
     TypeAdapter,
     WorksheetTemplate,
     compile_sheet,
@@ -112,6 +113,14 @@ def _show_caller_supplied_adapter() -> None:
     print(f"caller-supplied adapter: {values}")
 
 
+def _show_resource_limit() -> None:
+    limited = normalize_context(
+        {"regions": ["North", "South", "Central"]},
+        limits=ResourceLimits(max_container_items=2),
+    )
+    print(f"resource limit: {limited.diagnostics[0]}")
+
+
 def _show_rejections() -> None:
     invalid_context = {
         "unordered": {"North", "South"},
@@ -128,6 +137,7 @@ def main() -> None:
     _show_valid_examples()
     _show_immutable_normalization()
     _show_caller_supplied_adapter()
+    _show_resource_limit()
     _show_rejections()
 
 

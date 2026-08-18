@@ -119,6 +119,17 @@ canonical values, and ambiguous, duplicate, failing, or cyclic conversions are e
 The core supplies this adapter mechanism but does not yet bundle integrations for particular data
 libraries.
 
+### Resource limits
+
+The engine applies permissive default safety limits before and during rendering. They cover context
+depth and size, individual collection length, repeat iterations, planned cells, worksheet
+dimensions, workbook sheet count, and compressed/uncompressed XLSX package size. Platform code may
+override these through `ResourceLimits`; there is no template directive that can weaken them.
+
+Excel's absolute limits of 1,048,576 rows, 16,384 columns, and 32,767 characters in one text cell
+always apply. Limit failures stop immediately and produce no context, plan, or output workbook.
+Wall-clock cancellation belongs to the hosting platform.
+
 Private names or keys beginning with `_`, imports, assignment, comprehensions, lambdas, and arbitrary function or method calls are prohibited.
 
 ### Implemented filters
@@ -355,6 +366,10 @@ Unknown directives, duplicate loop options, `direction="right"`, and shift modes
 | `E1511` | Unrelated adapters match a value, so no unique most-specific adapter exists |
 | `E1512` | A value adapter raised an exception |
 | `E1513` | Adapter conversion formed a direct or indirect cycle |
+| `E1601` | Canonical context exceeded a configured resource limit |
+| `E1602` | Rendering exceeded a configured repeat, cell, row, or column limit |
+| `E1603` | Rendered geometry exceeded an absolute XLSX grid limit |
+| `E1604` | Rendered cell text exceeded Excel's absolute character limit |
 | `E2104` | Merged range crosses a block or cell-shift lane boundary |
 | `E2105` | Conditional formatting would require an unsupported transform |
 | `E2106` | Data validation would require an unsupported transform |
@@ -363,6 +378,8 @@ Unknown directives, duplicate loop options, `direction="right"`, and shift modes
 | `E2109` | Hyperlink would be copied or moved |
 | `E2110` | Comment would be copied or moved |
 | `E2111` | Cell shifting would repeat a worksheet-wide custom row height |
+| `E2201` | Compressed size, uncompressed size, or ZIP member count exceeded a package limit |
+| `E2202` | Workbook exceeded the configured worksheet-count limit |
 | `E3101` | Formula would require copying, movement, or translation |
 | `E3201` | Input and output resolve to the same path |
 | `E3202` | Input or output is not an `.xlsx` file |

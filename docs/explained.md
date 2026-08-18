@@ -89,6 +89,23 @@ This foundation has no dependency on a particular data library. Future bundled p
 Arrow, or DuckDB adapters will construct `TypeAdapter` values that produce the same canonical tree;
 they will not add layout decisions to the renderer.
 
+### Resource-limit policy
+
+[`limits.py`](../src/excel_template_writer/limits.py) defines one immutable `ResourceLimits`
+configuration used across the operation. Its permissive defaults bound canonical-tree depth and
+size, individual containers and strings, repeat iterations, planned cells, rendered dimensions,
+worksheet count, and compressed/uncompressed package size.
+
+Normalization measures the canonical tree after adapter conversion. A successful
+`NormalizedContext` retains `ContextStatistics`, so passing it to another sheet under equal or
+looser limits is a constant-time check. A stricter policy compares those statistics without walking
+the tree again.
+
+The layout planner counts selected repeat instances and completed block geometry before returning a
+plan. Excel's absolute grid and text limits are checked independently of configurable ceilings.
+Unlike ordinary validation, resource failures stop at the first deterministic breach: continuing
+work would undermine the safety boundary.
+
 ### Worksheet model
 
 [`model.py`](../src/excel_template_writer/model.py) contains the adapter-neutral worksheet model:
@@ -352,12 +369,19 @@ material cell, including styled blanks; copies direct cell formatting from each 
 applies planned row properties and merges; writes atomically to a different path; and reloads the
 serialized package. [`../scratch/demo.py`](../scratch/demo.py) now exercises this production path.
 
+Before `openpyxl` loads a template, the adapter inspects ZIP metadata for compressed size, declared
+uncompressed size, member count, and workbook sheet count. The same inspection runs against the
+temporary rendered package before it can replace the destination. It does not extract files or make
+layout decisions. Wall-clock cancellation and process memory enforcement remain responsibilities of
+the hosting platform.
+
 ## Current boundaries
 
 The executable system currently supports vertical repeats, row/cell shifts, scalar output, a small
 safe expression language, empty repeat placeholders, nested regions, stacked conditions, direct
 cell formatting, styled blanks, row/column properties, merged ranges, immutable context
-normalization, and caller-supplied type adapters.
+normalization, caller-supplied type adapters, deterministic resource limits, and XLSX package
+preflight.
 
 It does not yet provide:
 
@@ -366,7 +390,6 @@ It does not yet provide:
 - formula translation; unaffected formulas are preserved and affected formulas are rejected;
 - loop metadata such as `loop.index`;
 - an `{% empty %}` repeat branch;
-- resource-limit enforcement;
 - bundled pandas, Polars, Arrow, DuckDB, ORM, or other library-specific adapters;
 - transformation of conditional formatting, data validation, native Excel Tables, drawings,
   hyperlinks, or comments when their coordinates would change.

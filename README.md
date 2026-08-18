@@ -75,6 +75,18 @@ Adapters are scoped to one call. Canonical values always keep their built-in mea
 output is recursively normalized. Concrete pandas, Polars, Arrow, and DuckDB adapters are not
 bundled yet.
 
+Every operation also uses an immutable `ResourceLimits` policy. The defaults are permissive for
+small business workbooks but bound context depth and size, repeat work, planned cells, worksheet
+dimensions, sheet count, and XLSX package size. Callers can override the configurable ceilings;
+Excel's absolute grid and cell-text limits always apply.
+
+```python
+from excel_template_writer import ResourceLimits
+
+limits = ResourceLimits(max_repeat_iterations_per_sheet=10_000)
+plan = render_sheet(compiled, context, limits=limits).require()
+```
+
 Render a workbook to a separate output path with:
 
 ```python
@@ -84,6 +96,7 @@ render_workbook(
     "template.xlsx",
     "rendered.xlsx",
     {"rows": [{"name": "Service", "amount": 125}], "total": 125},
+    limits=limits,
 )
 ```
 
