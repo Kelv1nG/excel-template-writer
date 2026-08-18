@@ -38,9 +38,25 @@ class PlannedCell:
 
 
 @dataclass(frozen=True)
+class PlannedRow:
+    destination_row: int
+    source_row: int | None
+    instance_path: tuple[int, ...] = ()
+
+
+@dataclass(frozen=True)
+class PlannedMerge:
+    rectangle: Rectangle
+    source_rectangle: Rectangle
+    instance_path: tuple[int, ...] = ()
+
+
+@dataclass(frozen=True)
 class RenderPlan:
     sheet: str
     cells: tuple[PlannedCell, ...]
+    rows: tuple[PlannedRow, ...]
+    merges: tuple[PlannedMerge, ...]
     height: int
     width: int
 
@@ -59,6 +75,8 @@ class RenderResult:
 @dataclass
 class _Block:
     cells: dict[Coordinate, PlannedCell]
+    rows: dict[int, PlannedRow]
+    merges: list[PlannedMerge]
     height: int
     width: int
 
@@ -173,6 +191,46 @@ class _Renderer:
             shifted[new_coordinate] = replace(cell, coordinate=new_coordinate)
         return shifted
 
+    def shift_rows(
+        self,
+        rows: dict[int, PlannedRow],
+        *,
+        top: int,
+        bottom: int,
+        delta: int,
+        shift: str,
+    ) -> dict[int, PlannedRow]:
+        if shift != "rows":
+            return rows
+        shifted: dict[int, PlannedRow] = {}
+        for destination_row, row in rows.items():
+            if top <= destination_row <= bottom:
+                continue
+            new_row = destination_row + delta if destination_row > bottom else destination_row
+            shifted[new_row] = replace(row, destination_row=new_row)
+        return shifted
+
+    def shift_merges(
+        self,
+        merges: list[PlannedMerge],
+        *,
+        bottom: int,
+        left: int,
+        right: int,
+        delta: int,
+        shift: str,
+    ) -> list[PlannedMerge]:
+        shifted: list[PlannedMerge] = []
+        for merge in merges:
+            in_lane = shift == "rows" or (
+                left <= merge.rectangle.left and merge.rectangle.right <= right
+            )
+            rectangle = merge.rectangle
+            if in_lane and rectangle.top > bottom:
+                rectangle = rectangle.translated(rows=delta)
+            shifted.append(replace(merge, rectangle=rectangle))
+        return shifted
+
     def add_child_cells(
         self,
         grid: dict[Coordinate, PlannedCell],
@@ -193,6 +251,42 @@ class _Renderer:
                 continue
             grid[destination] = replace(cell, coordinate=destination)
 
+    def add_child_rows(
+        self,
+        rows: dict[int, PlannedRow],
+        child: _Block,
+        *,
+        top: int,
+        shift: str,
+    ) -> None:
+        if shift != "rows":
+            return
+        for destination_row, row in child.rows.items():
+            absolute_row = top + destination_row - 1
+            rows[absolute_row] = replace(row, destination_row=absolute_row)
+
+    def add_child_merges(
+        self,
+        merges: list[PlannedMerge],
+        child: _Block,
+        *,
+        top: int,
+        left: int,
+    ) -> None:
+        for merge in child.merges:
+            rectangle = merge.rectangle.translated(rows=top - 1, columns=left - 1)
+            if any(rectangle.intersects(existing.rectangle) for existing in merges):
+                self.diagnostic(
+                    DiagnosticCode.LAYOUT_COLLISION,
+                    "rendered merged ranges overlap",
+                    SourceLocation(
+                        self.compiled.template.name,
+                        Coordinate(rectangle.top, rectangle.left).a1,
+                    ),
+                )
+                continue
+            merges.append(replace(merge, rectangle=rectangle))
+
     def render_area(
         self,
         rectangle: Rectangle,
@@ -202,6 +296,24 @@ class _Renderer:
         path: tuple[int, ...],
     ) -> _Block:
         grid: dict[Coordinate, PlannedCell] = {}
+        rows = {
+            local_row: PlannedRow(
+                local_row,
+                rectangle.top + local_row - 1,
+                path,
+            )
+            for local_row in range(1, rectangle.height + 1)
+        }
+        merges = [
+            PlannedMerge(
+                merged.translated(rows=1 - rectangle.top, columns=1 - rectangle.left),
+                merged,
+                path,
+            )
+            for merged in self.compiled.template.merged_ranges
+            if rectangle.contains(merged)
+            and not any(child.rectangle.contains(merged) for child in children)
+        ]
         for source_coordinate, cell in self.compiled.cells.items():
             if not rectangle.contains_coordinate(source_coordinate):
                 continue
@@ -240,6 +352,21 @@ class _Renderer:
                 top=child_top,
                 location=child_node.span.location,
             )
+            rows = self.shift_rows(
+                rows,
+                top=child_top,
+                bottom=child_bottom,
+                delta=delta,
+                shift=shift,
+            )
+            merges = self.shift_merges(
+                merges,
+                bottom=child_bottom,
+                left=child_left,
+                right=child_right,
+                delta=delta,
+                shift=shift,
+            )
             self.add_child_cells(
                 grid,
                 child,
@@ -247,12 +374,22 @@ class _Renderer:
                 left=child_left,
                 location=child_node.span.location,
             )
+            self.add_child_rows(rows, child, top=child_top, shift=shift)
+            self.add_child_merges(
+                merges,
+                child,
+                top=child_top,
+                left=child_left,
+            )
             if shift == "rows":
                 height += delta
             else:
                 height = max(height, child_top + child.height - 1)
         height = max(height, max((coordinate.row for coordinate in grid), default=0))
-        return _Block(grid, max(0, height), rectangle.width)
+        height = max(height, max(rows, default=0))
+        for destination_row in range(1, height + 1):
+            rows.setdefault(destination_row, PlannedRow(destination_row, None, path))
+        return _Block(grid, rows, merges, max(0, height), rectangle.width)
 
     def render_region(
         self,
@@ -301,19 +438,31 @@ class _Renderer:
                     )
                 )
             grid: dict[Coordinate, PlannedCell] = {}
+            rows: dict[int, PlannedRow] = {}
+            merges: list[PlannedMerge] = []
             row_offset = 0
             for block in blocks:
                 for coordinate, cell in block.cells.items():
                     destination = Coordinate(coordinate.row + row_offset, coordinate.column)
                     grid[destination] = replace(cell, coordinate=destination)
+                for destination_row, row in block.rows.items():
+                    absolute_row = destination_row + row_offset
+                    rows[absolute_row] = replace(row, destination_row=absolute_row)
+                for merge in block.merges:
+                    merges.append(
+                        replace(
+                            merge,
+                            rectangle=merge.rectangle.translated(rows=row_offset),
+                        )
+                    )
                 row_offset += block.height
-            return _Block(grid, row_offset, node.rectangle.width)
+            return _Block(grid, rows, merges, row_offset, node.rectangle.width)
 
         if isinstance(node, IfNode):
             selected = bool(self.evaluate_region_expression(node, scope))
             branch = node.true_rectangle if selected else node.false_rectangle
             if branch is None:
-                return _Block({}, 0, node.rectangle.width)
+                return _Block({}, {}, [], 0, node.rectangle.width)
             branch_children = tuple(
                 child for child in node.children if branch.contains(child.rectangle)
             )
@@ -329,4 +478,26 @@ def render_sheet(compiled: CompiledSheet, context: Mapping[str, Any]) -> RenderR
     if renderer.diagnostics:
         return RenderResult(None, tuple(renderer.diagnostics))
     cells = tuple(cell for _, cell in sorted(block.cells.items()))
-    return RenderResult(RenderPlan(compiled.template.name, cells, block.height, block.width), ())
+    rows = tuple(row for _, row in sorted(block.rows.items()))
+    merges = tuple(
+        sorted(
+            block.merges,
+            key=lambda merge: (
+                merge.rectangle.top,
+                merge.rectangle.left,
+                merge.rectangle.bottom,
+                merge.rectangle.right,
+            ),
+        )
+    )
+    return RenderResult(
+        RenderPlan(
+            compiled.template.name,
+            cells,
+            rows,
+            merges,
+            block.height,
+            block.width,
+        ),
+        (),
+    )

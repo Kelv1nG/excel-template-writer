@@ -97,6 +97,17 @@ class Rectangle:
             or other.right < self.left
         )
 
+    def intersects(self, other: Rectangle) -> bool:
+        return not self.is_disjoint(other)
+
+    def translated(self, *, rows: int = 0, columns: int = 0) -> Rectangle:
+        return Rectangle(
+            self.top + rows,
+            self.left + columns,
+            self.bottom + rows,
+            self.right + columns,
+        )
+
 
 @dataclass(frozen=True)
 class WorksheetTemplate:
@@ -104,9 +115,11 @@ class WorksheetTemplate:
 
     name: str
     cells: Mapping[Coordinate, Any]
+    merged_ranges: tuple[Rectangle, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "cells", MappingProxyType(dict(self.cells)))
+        object.__setattr__(self, "merged_ranges", tuple(self.merged_ranges))
 
     @classmethod
     def from_rows(cls, name: str, rows: Sequence[Sequence[Any]]) -> WorksheetTemplate:

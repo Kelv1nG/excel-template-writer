@@ -1,7 +1,7 @@
 from datetime import date
 
 from excel_template_writer.compiler import compile_sheet
-from excel_template_writer.model import WorksheetTemplate
+from excel_template_writer.model import Coordinate, Rectangle, WorksheetTemplate
 from excel_template_writer.render import RenderPlan, render_sheet
 
 
@@ -154,3 +154,34 @@ def test_condition_inherits_cell_shift_isolation_from_its_container() -> None:
         "A2": "Tail",
         "B2": "Keeps row",
     }
+
+
+def test_render_plan_carries_explicit_row_and_merge_provenance() -> None:
+    template = WorksheetTemplate(
+        "Report",
+        {
+            Coordinate(1, 1): "{% for card in cards %}{{ card.title }}",
+            Coordinate(1, 2): None,
+            Coordinate(2, 1): "Owner",
+            Coordinate(2, 2): "{{ card.owner }}{% endfor %}",
+        },
+        (Rectangle(1, 1, 1, 2),),
+    )
+    compiled = compile_sheet(template).require()
+
+    plan = render_sheet(
+        compiled,
+        {"cards": [{"title": "First", "owner": "Mina"}, {"title": "Second", "owner": "Jo"}]},
+    ).require()
+
+    assert [(row.destination_row, row.source_row) for row in plan.rows] == [
+        (1, 1),
+        (2, 2),
+        (3, 1),
+        (4, 2),
+    ]
+    assert [merge.rectangle for merge in plan.merges] == [
+        Rectangle(1, 1, 1, 2),
+        Rectangle(3, 1, 3, 2),
+    ]
+    assert all(merge.source_rectangle == Rectangle(1, 1, 1, 2) for merge in plan.merges)

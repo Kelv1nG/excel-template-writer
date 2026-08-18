@@ -298,6 +298,46 @@ def _validate_sibling_shift_lanes(
                 )
 
 
+def _validate_merged_ranges(
+    template: WorksheetTemplate,
+    specs: list[_RegionSpec],
+    diagnostics: list[Diagnostic],
+) -> None:
+    for merged in template.merged_ranges:
+        for spec in specs:
+            region = spec.rectangle
+            if merged.is_disjoint(region) or region.contains(merged):
+                pass
+            else:
+                diagnostics.append(
+                    Diagnostic(
+                        DiagnosticCode.MERGE_CROSSES_BLOCK_BOUNDARY,
+                        "merged range crosses a structural block boundary",
+                        SourceLocation(
+                            template.name,
+                            Coordinate(merged.top, merged.left).a1,
+                        ),
+                    )
+                )
+                continue
+
+            if _spec_shift(spec) != "cells" or merged.bottom <= region.bottom:
+                continue
+            overlaps_lane = not (merged.right < region.left or merged.left > region.right)
+            contained_in_lane = region.left <= merged.left and merged.right <= region.right
+            if overlaps_lane and not contained_in_lane:
+                diagnostics.append(
+                    Diagnostic(
+                        DiagnosticCode.MERGE_CROSSES_BLOCK_BOUNDARY,
+                        'merged range crosses a shift="cells" lane boundary',
+                        SourceLocation(
+                            template.name,
+                            Coordinate(merged.top, merged.left).a1,
+                        ),
+                    )
+                )
+
+
 def _make_node(
     spec: _RegionSpec,
     specs: list[_RegionSpec],
@@ -450,6 +490,7 @@ def compile_sheet(template: WorksheetTemplate) -> CompilationResult:
 
     top_level_specs = _children_of(None, specs)
     _validate_sibling_shift_lanes(top_level_specs, diagnostics)
+    _validate_merged_ranges(template, specs, diagnostics)
     children = tuple(
         _make_node(spec, specs, diagnostics, "rows")
         for spec in sorted(
