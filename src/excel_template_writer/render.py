@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -27,6 +27,11 @@ from excel_template_writer.expressions import (
     evaluate_expression,
 )
 from excel_template_writer.model import Coordinate, Rectangle
+from excel_template_writer.values import (
+    is_collection_value,
+    is_ordered_collection,
+    validate_context,
+)
 
 
 @dataclass(frozen=True)
@@ -81,8 +86,7 @@ class _Block:
     width: int
 
 
-def _is_collection(value: Any) -> bool:
-    return isinstance(value, (Mapping, list, tuple, set, frozenset))
+_EVALUATION_FAILED = object()
 
 
 class _Renderer:
@@ -133,7 +137,7 @@ class _Renderer:
                     part.span.location,
                 )
                 value = None
-            if _is_collection(value):
+            if is_collection_value(value):
                 self.diagnostic(
                     DiagnosticCode.COLLECTION_IN_SCALAR_CELL,
                     "collections must be rendered by a for block or an explicit filter",
@@ -157,7 +161,7 @@ class _Renderer:
             return evaluate_expression(expression, scope)
         except ExpressionEvaluationError as error:
             self.diagnostic(DiagnosticCode.MISSING_VALUE, str(error), node.span.location)
-            return None
+            return _EVALUATION_FAILED
 
     def shift_grid(
         self,
@@ -400,14 +404,12 @@ class _Renderer:
     ) -> _Block:
         if isinstance(node, ForNode):
             raw_items = self.evaluate_region_expression(node, scope)
-            if raw_items is None:
+            if raw_items is _EVALUATION_FAILED:
                 items: list[Any] = []
-            elif isinstance(raw_items, (str, bytes, Mapping)) or not isinstance(
-                raw_items, Iterable
-            ):
+            elif not is_ordered_collection(raw_items):
                 self.diagnostic(
                     DiagnosticCode.EXPECTED_COLLECTION,
-                    "for expression must evaluate to a non-string iterable",
+                    "for expression must evaluate to an ordered list or tuple",
                     node.span.location,
                 )
                 items = []
@@ -459,7 +461,8 @@ class _Renderer:
             return _Block(grid, rows, merges, row_offset, node.rectangle.width)
 
         if isinstance(node, IfNode):
-            selected = bool(self.evaluate_region_expression(node, scope))
+            raw_condition = self.evaluate_region_expression(node, scope)
+            selected = raw_condition is not _EVALUATION_FAILED and bool(raw_condition)
             branch = node.true_rectangle if selected else node.false_rectangle
             if branch is None:
                 return _Block({}, {}, [], 0, node.rectangle.width)
@@ -473,6 +476,9 @@ class _Renderer:
 def render_sheet(compiled: CompiledSheet, context: Mapping[str, Any]) -> RenderResult:
     """Evaluate a compiled sheet into an adapter-neutral destination-cell plan."""
 
+    context_diagnostics = validate_context(context)
+    if context_diagnostics:
+        return RenderResult(None, context_diagnostics)
     renderer = _Renderer(compiled)
     block = renderer.render_area(compiled.rectangle, compiled.children, context, frozenset(), ())
     if renderer.diagnostics:

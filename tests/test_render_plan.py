@@ -1,6 +1,7 @@
 from datetime import date
 
 from excel_template_writer.compiler import compile_sheet
+from excel_template_writer.diagnostics import DiagnosticCode
 from excel_template_writer.model import Coordinate, Rectangle, WorksheetTemplate
 from excel_template_writer.render import RenderPlan, render_sheet
 
@@ -185,3 +186,54 @@ def test_render_plan_carries_explicit_row_and_merge_provenance() -> None:
         Rectangle(3, 1, 3, 2),
     ]
     assert all(merge.source_rectangle == Rectangle(1, 1, 1, 2) for merge in plan.merges)
+
+
+def test_render_rejects_noncanonical_context_before_evaluation() -> None:
+    template = WorksheetTemplate.from_rows(
+        "Report",
+        [["{% for item in items %}{{ item }}{% endfor %}"]],
+    )
+    compiled = compile_sheet(template).require()
+
+    result = render_sheet(compiled, {"items": {"A", "B"}})
+
+    assert result.plan is None
+    assert [diagnostic.code for diagnostic in result.diagnostics] == [
+        DiagnosticCode.UNORDERED_CONTEXT_COLLECTION
+    ]
+    assert str(result.diagnostics[0].location) == "context.items"
+
+
+def test_repeat_requires_an_ordered_collection_including_for_null() -> None:
+    template = WorksheetTemplate.from_rows(
+        "Report",
+        [["{% for item in items %}{{ item }}{% endfor %}"]],
+    )
+    compiled = compile_sheet(template).require()
+
+    null_result = render_sheet(compiled, {"items": None})
+    record_result = render_sheet(compiled, {"items": {"first": "A"}})
+    tuple_result = render_sheet(compiled, {"items": ("A", "B")}).require()
+
+    assert [diagnostic.code for diagnostic in null_result.diagnostics] == [
+        DiagnosticCode.EXPECTED_COLLECTION
+    ]
+    assert [diagnostic.code for diagnostic in record_result.diagnostics] == [
+        DiagnosticCode.EXPECTED_COLLECTION
+    ]
+    assert _values_by_coordinate(tuple_result) == {"A1": "A", "A2": "B"}
+
+
+def test_records_and_ordered_collections_are_not_scalar_cell_values() -> None:
+    template = WorksheetTemplate.from_rows("Report", [["{{ value }}"]])
+    compiled = compile_sheet(template).require()
+
+    record_result = render_sheet(compiled, {"value": {"name": "A"}})
+    collection_result = render_sheet(compiled, {"value": ["A", "B"]})
+
+    assert [diagnostic.code for diagnostic in record_result.diagnostics] == [
+        DiagnosticCode.COLLECTION_IN_SCALAR_CELL
+    ]
+    assert [diagnostic.code for diagnostic in collection_result.diagnostics] == [
+        DiagnosticCode.COLLECTION_IN_SCALAR_CELL
+    ]

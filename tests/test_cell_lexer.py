@@ -1,4 +1,4 @@
-from excel_template_writer.diagnostics import DiagnosticCode
+from excel_template_writer.diagnostics import DiagnosticCode, SourceLocation
 from excel_template_writer.syntax import DirectiveToken, OutputToken, TextToken, lex_cell
 
 
@@ -31,5 +31,6 @@ def test_reports_unterminated_tag_at_the_cell() -> None:
     assert len(result.diagnostics) == 1
     diagnostic = result.diagnostics[0]
     assert diagnostic.code is DiagnosticCode.UNTERMINATED_EXPRESSION
+    assert isinstance(diagnostic.location, SourceLocation)
     assert diagnostic.location.sheet == "Sheet1"
     assert diagnostic.location.cell == "C7"

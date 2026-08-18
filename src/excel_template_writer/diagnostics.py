@@ -24,6 +24,13 @@ class DiagnosticCode(StrEnum):
     EXPECTED_COLLECTION = "E1303"
     LAYOUT_COLLISION = "E1401"
     OVERLAPPING_ROW_SHIFTS = "E1402"
+    CONTEXT_MUST_BE_MAPPING = "E1501"
+    CONTEXT_KEY_MUST_BE_STRING = "E1502"
+    UNSUPPORTED_CONTEXT_VALUE = "E1503"
+    UNORDERED_CONTEXT_COLLECTION = "E1504"
+    NON_FINITE_CONTEXT_NUMBER = "E1505"
+    CYCLIC_CONTEXT_VALUE = "E1506"
+    TIMEZONE_AWARE_CONTEXT_VALUE = "E1507"
     MERGE_CROSSES_BLOCK_BOUNDARY = "E2104"
     CONDITIONAL_FORMATTING_REQUIRES_UNSUPPORTED_TRANSFORM = "E2105"
     DATA_VALIDATION_REQUIRES_UNSUPPORTED_TRANSFORM = "E2106"
@@ -50,10 +57,18 @@ class SourceLocation:
 
 
 @dataclass(frozen=True)
+class ContextLocation:
+    path: str
+
+    def __str__(self) -> str:
+        return self.path
+
+
+@dataclass(frozen=True)
 class Diagnostic:
     code: DiagnosticCode
     message: str
-    location: SourceLocation
+    location: SourceLocation | ContextLocation
 
     def __str__(self) -> str:
         return f"{self.code} {self.location}: {self.message}"

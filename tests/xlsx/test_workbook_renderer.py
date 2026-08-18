@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, time
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -11,7 +12,11 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Protection, Si
 from openpyxl.worksheet.datavalidation import DataValidation
 from openpyxl.worksheet.table import Table
 
-from excel_template_writer.diagnostics import DiagnosticCode, TemplateCompilationError
+from excel_template_writer.diagnostics import (
+    DiagnosticCode,
+    TemplateCompilationError,
+    TemplateRenderError,
+)
 from excel_template_writer.xlsx import render_workbook
 
 
@@ -159,12 +164,22 @@ def test_render_workbook_preserves_native_value_types(tmp_path: Path) -> None:
     sheet["A1"].number_format = "yyyy-mm-dd"
     sheet["B1"] = "{{ approved }}"
     sheet["C1"] = "{{ total }}"
+    sheet["D1"] = "{{ exact_amount }}"
+    sheet["D1"].number_format = "$#,##0.00"
+    sheet["E1"] = "{{ cutoff }}"
+    sheet["E1"].number_format = "hh:mm:ss"
     _save(workbook, template_path)
 
     render_workbook(
         template_path,
         output_path,
-        {"issued_on": date(2026, 8, 13), "approved": True, "total": 42.5},
+        {
+            "issued_on": date(2026, 8, 13),
+            "approved": True,
+            "total": 42.5,
+            "exact_amount": Decimal("19.75"),
+            "cutoff": time(17, 30),
+        },
     )
 
     rendered = load_workbook(output_path)
@@ -177,6 +192,12 @@ def test_render_workbook_preserves_native_value_types(tmp_path: Path) -> None:
         assert sheet["B1"].data_type == "b"
         assert sheet["C1"].value == 42.5
         assert sheet["C1"].data_type == "n"
+        assert sheet["D1"].value == 19.75
+        assert sheet["D1"].data_type == "n"
+        assert sheet["D1"].number_format == "$#,##0.00"
+        assert sheet["E1"].value == time(17, 30)
+        assert sheet["E1"].data_type == "d"
+        assert sheet["E1"].number_format == "hh:mm:ss"
     finally:
         rendered.close()
 
@@ -448,3 +469,20 @@ def test_rejects_non_xlsx_paths_before_loading(tmp_path: Path) -> None:
     assert DiagnosticCode.UNSUPPORTED_WORKBOOK_FORMAT in {
         diagnostic.code for diagnostic in caught.value.diagnostics
     }
+
+
+def test_rejects_noncanonical_context_before_writing(tmp_path: Path) -> None:
+    template_path = tmp_path / "template.xlsx"
+    output_path = tmp_path / "should-not-exist.xlsx"
+    workbook = Workbook()
+    workbook.active["A1"] = "{% for item in items %}{{ item }}{% endfor %}"
+    _save(workbook, template_path)
+
+    with pytest.raises(TemplateRenderError) as caught:
+        render_workbook(template_path, output_path, {"items": {"A", "B"}})
+
+    assert [diagnostic.code for diagnostic in caught.value.diagnostics] == [
+        DiagnosticCode.UNORDERED_CONTEXT_COLLECTION
+    ]
+    assert str(caught.value.diagnostics[0].location) == "context.items"
+    assert not output_path.exists()

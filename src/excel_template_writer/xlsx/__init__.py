@@ -13,8 +13,10 @@ from excel_template_writer.diagnostics import (
     DiagnosticCode,
     SourceLocation,
     TemplateCompilationError,
+    TemplateRenderError,
 )
 from excel_template_writer.render import RenderPlan, render_sheet
+from excel_template_writer.values import validate_context
 from excel_template_writer.xlsx.reader import read_workbook
 from excel_template_writer.xlsx.validation import validate_sheet_features
 from excel_template_writer.xlsx.writer import write_workbook
@@ -59,6 +61,10 @@ def render_workbook(
                 ),
             )
         )
+
+    context_diagnostics = validate_context(context)
+    if context_diagnostics:
+        raise TemplateRenderError(context_diagnostics)
 
     snapshot = read_workbook(source_path)
     plans: list[RenderPlan] = []
