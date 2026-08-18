@@ -624,10 +624,54 @@ Rendering is atomic: any error prevents an output workbook from being returned a
 - Expression evaluation is allowlist-based.
 - Rendering performs no network access.
 - Rendering performs no template-directed filesystem access.
-- ZIP/package size, cell count, nesting depth, collection length, string length, and render time must have configurable limits.
+- ZIP/package size, cell count, nesting depth, collection length, and string length have
+  configurable limits. Wall-clock cancellation and process-level memory limits belong to the host
+  platform because they cannot be enforced deterministically inside a synchronous pure planner.
 - The input file is never overwritten.
 - External workbook links are rejected or handled under an explicit policy.
 - Formula injection is a platform concern for user-supplied strings. Plain strings beginning with `=` must remain strings unless a trusted formula construct is explicitly used.
+
+### 17.1 Resource-limit policy
+
+`ResourceLimits` is one immutable configuration shared by normalization, layout planning, and the
+XLSX adapter. Defaults are deliberately permissive for ordinary small business workbooks while
+still bounding accidental or hostile input:
+
+| Limit | Default |
+| --- | ---: |
+| Canonical context nesting depth | 64 |
+| Canonical context nodes | 1,000,000 |
+| Items in one mapping, list, or tuple | 100,000 |
+| Characters in one input string | 1,000,000 |
+| Total repeat iterations per worksheet | 100,000 |
+| Planned cells per worksheet | 500,000 |
+| Planned cells per workbook | 1,000,000 |
+| Rendered rows per worksheet | 250,000 |
+| Rendered columns per worksheet | 4,096 |
+| Worksheets per workbook | 100 |
+| Compressed XLSX package bytes | 50 MiB |
+| Uncompressed XLSX package bytes | 250 MiB |
+| ZIP members in one XLSX package | 10,000 |
+
+The root context mapping has depth zero. Context-node and container limits apply after adapter
+conversion to the canonical tree. An empty-repeat placeholder counts as one repeat iteration.
+Planned-cell totals include material blank cells retained for formatting.
+
+The XLSX format's absolute bounds are separate and cannot be raised or disabled: 1,048,576 rows,
+16,384 columns, and 32,767 characters in a cell text value. A lower configured resource limit is
+checked first. Runtime strings are checked after expression interpolation, before the writer can
+silently truncate them.
+
+Resource-limit diagnostics are fail-fast because continuing traversal or planning would defeat the
+safety boundary. Ordinary syntax, semantic, and canonical-value diagnostics continue to aggregate
+where safe. Every limit failure produces no normalized context, render plan, or published workbook.
+
+`NormalizedContext` retains immutable summary statistics. Reusing it under equal or looser limits
+requires no traversal; stricter limits are checked against those statistics.
+
+The XLSX adapter checks the source package before `openpyxl` loads it and checks the serialized
+temporary output before publication. Compressed size, declared uncompressed ZIP size, member count,
+and sheet count are bounded without interpreting worksheet layout.
 
 ## 18. API direction
 
@@ -638,10 +682,10 @@ File paths are convenience adapters, not the core abstraction.
 The core operations are conceptually:
 
 ```text
-normalize_context(raw_context, adapters) -> NormalizationResult
+normalize_context(raw_context, adapters, limits) -> NormalizationResult
 compile(template) -> CompiledTemplate
 validate(compiled_template, optional_schema) -> Diagnostics
-render(compiled_template, normalized_context, options) -> RenderResult
+render(compiled_template, normalized_context, limits, options) -> RenderResult
 ```
 
 A compiled template may be cacheable if it does not retain mutable `openpyxl` objects.
@@ -733,12 +777,11 @@ Completion of Phase 3 constitutes the first usable language release.
 - grouping/subtotals as justified by real templates
 - optional images and other explicitly supported workbook features
 
-## 21. Open design decisions
+## 21. Open design decision
 
-The following decisions need confirmation before this becomes version 1.0 of the language specification:
+The following decision needs confirmation before this becomes version 1.0 of the language specification:
 
 1. What is the exact author syntax and overflow behavior for isolation regions?
-2. What practical workbook and collection size should the default resource limits target after benchmarks exist?
 
 ## 22. Library rationale and known constraints
 
