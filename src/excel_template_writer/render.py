@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -28,9 +28,11 @@ from excel_template_writer.expressions import (
 )
 from excel_template_writer.model import Coordinate, Rectangle
 from excel_template_writer.values import (
+    NormalizedContext,
+    TypeAdapter,
     is_collection_value,
     is_ordered_collection,
-    validate_context,
+    normalize_context,
 )
 
 
@@ -473,14 +475,29 @@ class _Renderer:
         raise TypeError(f"unsupported region node: {type(node).__name__}")
 
 
-def render_sheet(compiled: CompiledSheet, context: Mapping[str, Any]) -> RenderResult:
+def render_sheet(
+    compiled: CompiledSheet,
+    context: object,
+    *,
+    adapters: Iterable[TypeAdapter[Any]] = (),
+) -> RenderResult:
     """Evaluate a compiled sheet into an adapter-neutral destination-cell plan."""
 
-    context_diagnostics = validate_context(context)
-    if context_diagnostics:
-        return RenderResult(None, context_diagnostics)
+    if isinstance(context, NormalizedContext):
+        normalized_context = context
+    else:
+        normalization = normalize_context(context, adapters=adapters)
+        if normalization.context is None:
+            return RenderResult(None, normalization.diagnostics)
+        normalized_context = normalization.context
     renderer = _Renderer(compiled)
-    block = renderer.render_area(compiled.rectangle, compiled.children, context, frozenset(), ())
+    block = renderer.render_area(
+        compiled.rectangle,
+        compiled.children,
+        normalized_context,
+        frozenset(),
+        (),
+    )
     if renderer.diagnostics:
         return RenderResult(None, tuple(renderer.diagnostics))
     cells = tuple(cell for _, cell in sorted(block.cells.items()))

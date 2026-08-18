@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -13,10 +13,9 @@ from excel_template_writer.diagnostics import (
     DiagnosticCode,
     SourceLocation,
     TemplateCompilationError,
-    TemplateRenderError,
 )
 from excel_template_writer.render import RenderPlan, render_sheet
-from excel_template_writer.values import validate_context
+from excel_template_writer.values import TypeAdapter, normalize_context
 from excel_template_writer.xlsx.reader import read_workbook
 from excel_template_writer.xlsx.validation import validate_sheet_features
 from excel_template_writer.xlsx.writer import write_workbook
@@ -31,7 +30,9 @@ class WorkbookRenderResult:
 def render_workbook(
     template_path: str | Path,
     output_path: str | Path,
-    context: Mapping[str, Any],
+    context: object,
+    *,
+    adapters: Iterable[TypeAdapter[Any]] = (),
 ) -> WorkbookRenderResult:
     """Compile and plan all sheets before atomically writing a separate XLSX file."""
 
@@ -62,9 +63,7 @@ def render_workbook(
             )
         )
 
-    context_diagnostics = validate_context(context)
-    if context_diagnostics:
-        raise TemplateRenderError(context_diagnostics)
+    normalized_context = normalize_context(context, adapters=adapters).require()
 
     snapshot = read_workbook(source_path)
     plans: list[RenderPlan] = []
@@ -74,7 +73,7 @@ def render_workbook(
         if compilation.compiled is None:
             diagnostics.extend(compilation.diagnostics)
             continue
-        rendering = render_sheet(compilation.compiled, context)
+        rendering = render_sheet(compilation.compiled, normalized_context)
         if rendering.plan is None:
             diagnostics.extend(rendering.diagnostics)
             continue

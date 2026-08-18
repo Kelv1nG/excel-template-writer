@@ -17,12 +17,52 @@ from excel_template_writer.diagnostics import (
     TemplateCompilationError,
     TemplateRenderError,
 )
+from excel_template_writer.values import TypeAdapter
 from excel_template_writer.xlsx import render_workbook
 
 
 def _save(workbook: Workbook, path: Path) -> Path:
     workbook.save(path)
     return path
+
+
+def test_render_workbook_normalizes_adapter_values_once_for_all_sheets(
+    tmp_path: Path,
+) -> None:
+    class Rows:
+        def __init__(self) -> None:
+            self.values = [{"name": "Alpha"}, {"name": "Beta"}]
+
+    template_path = tmp_path / "adapter-template.xlsx"
+    output_path = tmp_path / "adapter-output.xlsx"
+    workbook = Workbook()
+    workbook.active.title = "First"
+    workbook.active["A1"] = "{% for row in rows %}{{ row.name }}{% endfor %}"
+    second = workbook.create_sheet("Second")
+    second["A1"] = "{% for row in rows %}{{ row.name }}{% endfor %}"
+    _save(workbook, template_path)
+    calls = 0
+
+    def convert(value: Rows) -> list[dict[str, str]]:
+        nonlocal calls
+        calls += 1
+        return value.values
+
+    render_workbook(
+        template_path,
+        output_path,
+        {"rows": Rows()},
+        adapters=(TypeAdapter(Rows, convert),),
+    )
+
+    assert calls == 1
+    rendered = load_workbook(output_path)
+    try:
+        for sheet in rendered.worksheets:
+            assert sheet["A1"].value == "Alpha"
+            assert sheet["A2"].value == "Beta"
+    finally:
+        rendered.close()
 
 
 def test_render_workbook_copies_values_direct_styles_styled_blanks_and_dimensions(

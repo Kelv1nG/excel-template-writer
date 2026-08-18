@@ -6,7 +6,12 @@ from excel_template_writer.render import RenderPlan, RenderResult, render_sheet
 from excel_template_writer.values import (
     CanonicalContext,
     CanonicalValue,
+    InputValue,
+    NormalizationResult,
+    NormalizedContext,
     ScalarValue,
+    TypeAdapter,
+    normalize_context,
     validate_context,
 )
 
@@ -15,12 +20,17 @@ __all__ = [
     "CanonicalValue",
     "CompilationResult",
     "Coordinate",
+    "InputValue",
+    "NormalizationResult",
+    "NormalizedContext",
     "Rectangle",
     "RenderPlan",
     "RenderResult",
     "ScalarValue",
+    "TypeAdapter",
     "WorksheetTemplate",
     "compile_sheet",
+    "normalize_context",
     "render_sheet",
     "validate_context",
 ]

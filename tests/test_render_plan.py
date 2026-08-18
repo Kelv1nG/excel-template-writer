@@ -4,6 +4,7 @@ from excel_template_writer.compiler import compile_sheet
 from excel_template_writer.diagnostics import DiagnosticCode
 from excel_template_writer.model import Coordinate, Rectangle, WorksheetTemplate
 from excel_template_writer.render import RenderPlan, render_sheet
+from excel_template_writer.values import TypeAdapter
 
 
 def _values_by_coordinate(plan: RenderPlan) -> dict[str, object]:
@@ -35,6 +36,26 @@ def test_vertical_repeat_inserts_rows_and_moves_content_below() -> None:
         "A4": "Total",
         "B4": 30,
     }
+
+
+def test_render_sheet_normalizes_caller_supplied_adapter_values() -> None:
+    class Rows:
+        def __init__(self) -> None:
+            self.values = [{"name": "A"}, {"name": "B"}]
+
+    template = WorksheetTemplate.from_rows(
+        "Report",
+        [["{% for row in rows %}{{ row.name }}{% endfor %}"]],
+    )
+    compiled = compile_sheet(template).require()
+
+    plan = render_sheet(
+        compiled,
+        {"rows": Rows()},
+        adapters=(TypeAdapter(Rows, lambda value: value.values),),
+    ).require()
+
+    assert _values_by_coordinate(plan) == {"A1": "A", "A2": "B"}
 
 
 def test_empty_collection_keeps_one_blank_formatted_instance() -> None:
