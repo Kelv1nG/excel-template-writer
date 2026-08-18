@@ -50,6 +50,28 @@ The important dependency direction is left to right. `openpyxl` belongs at the r
 
 Each stage produces a representation suited to one job. Later stages consume those representations instead of re-reading template strings.
 
+### Canonical render context
+
+[`values.py`](../src/excel_template_writer/values.py) defines the pure input boundary. A canonical
+context is a string-keyed mapping containing supported scalar values, string-keyed records, and
+finite ordered lists or tuples. It contains no `openpyxl`, DataFrame, ORM, cursor, or arbitrary
+iterator objects.
+
+`validate_context()` walks the complete tree before evaluation. It reports all detected problems
+with stable codes and paths such as `context.lines[2].amount`, rejects cycles while allowing a
+shared subtree, and does not mutate caller-owned data. `render_sheet()` enforces this boundary for
+the pure API; `render_workbook()` performs the same check once before reading, planning, or writing
+a workbook.
+
+Value categories permit operations but do not choose layout. A scalar may occupy a sole-expression
+cell, a record supports mapping-property access, and a list or tuple may drive a `for` node. A list
+of records has no special `table` tag: the source rectangle determines whether it appears as table
+rows, cards, or another repeated presentation.
+
+Library-specific tabular conversion remains outside the core. Future pandas, Polars, Arrow, or
+DuckDB adapters will produce this same canonical tree before evaluation; they will not add layout
+decisions to the renderer.
+
 ### Worksheet model
 
 [`model.py`](../src/excel_template_writer/model.py) contains the adapter-neutral worksheet model:
@@ -287,7 +309,10 @@ plan = rendering.require()
 
 Compilation produces no AST on error. Rendering produces no plan on error. A production workbook writer must be invoked only after a complete plan exists, so invalid templates cannot leave a partially rendered workbook presented as success.
 
-Current diagnostics cover lexical errors, invalid directives and expressions, unmatched or ambiguous markers, invalid geometry, partial overlap, missing data, scalar/collection type mistakes, row-shift conflicts, and destination collisions.
+Current diagnostics cover lexical errors, invalid directives and expressions, unmatched or
+ambiguous markers, invalid geometry, partial overlap, invalid context values, missing data,
+scalar/collection type mistakes, row-shift conflicts, and destination collisions. Worksheet
+diagnostics carry sheet/cell locations; canonical-value diagnostics carry context paths.
 
 ## The XLSX boundary
 
@@ -314,7 +339,8 @@ serialized package. [`../scratch/demo.py`](../scratch/demo.py) now exercises thi
 
 The executable system currently supports vertical repeats, row/cell shifts, scalar output, a small
 safe expression language, empty repeat placeholders, nested regions, stacked conditions, direct
-cell formatting, styled blanks, row/column properties, and merged ranges.
+cell formatting, styled blanks, row/column properties, merged ranges, and strict canonical-context
+validation.
 
 It does not yet provide:
 
@@ -324,6 +350,7 @@ It does not yet provide:
 - loop metadata such as `loop.index`;
 - an `{% empty %}` repeat branch;
 - resource-limit enforcement;
+- pandas, Polars, Arrow, DuckDB, ORM, or other platform-value adapters;
 - transformation of conditional formatting, data validation, native Excel Tables, drawings,
   hyperlinks, or comments when their coordinates would change.
 

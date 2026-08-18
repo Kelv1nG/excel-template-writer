@@ -39,6 +39,26 @@ plan = render_sheet(
 
 Compilation and rendering return structured diagnostics; `.require()` raises an exception only when a caller prefers exception-based control flow.
 
+Render contexts use ordinary Python values—no `TypedValue` wrapper is required. Supported values
+are null, strings, booleans, integers, finite floats and decimals, timezone-naive dates/times,
+string-keyed mappings, and ordered lists or tuples. The complete context is validated before
+evaluation, with errors reported at paths such as `context.rows[2].amount`.
+
+```python
+from excel_template_writer import validate_context
+
+context = {
+    "title": "Revenue",
+    "regions": ["North", "South"],
+    "rows": [{"description": "Service", "amount": 125}],
+}
+assert validate_context(context) == ()
+```
+
+A list of records is table-shaped input, not a special table type. Template directives and their
+rectangles decide whether those records render as rows, cards, or another layout. DataFrames and
+other library-specific objects require a platform adapter; those adapters are not implemented yet.
+
 Render a workbook to a separate output path with:
 
 ```python

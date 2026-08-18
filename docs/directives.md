@@ -91,6 +91,28 @@ The current expression language supports:
 
 Property syntax reads mapping keys. It does not invoke attributes or methods on arbitrary Python objects. Platform data should be normalized to mappings and ordered collections before rendering.
 
+### Render context values
+
+Template authors use normal variable names; they do not declare types or use wrappers such as
+`TypedValue(value, "table")`. The platform supplies a context made from:
+
+- null, strings, booleans, integers, finite floats and decimals;
+- timezone-naive dates, datetimes, and times;
+- records with string keys;
+- finite ordered lists or tuples containing supported values.
+
+Runtime types determine which expression operations are legal. Template syntax determines
+presentation. For example, the same list of records may be rendered by a one-row repeat as a table
+body or by a multi-row repeat as cards.
+
+Sets, generators, non-string record keys, non-finite numbers, timezone-aware temporal values,
+cycles, arbitrary objects, and unadapted DataFrames are rejected before evaluation. Diagnostics
+name the input path, for example `context.lines[2].amount`.
+
+Pandas, Polars, Arrow, DuckDB, ORM, and similar objects belong behind platform adapters. An adapter
+must convert them into ordinary string-keyed records and ordered collections before rendering.
+Adapter implementation is a later milestone; the current API rejects those objects explicitly.
+
 Private names or keys beginning with `_`, imports, assignment, comprehensions, lambdas, and arbitrary function or method calls are prohibited.
 
 ### Implemented filters
@@ -316,6 +338,13 @@ Unknown directives, duplicate loop options, `direction="right"`, and shift modes
 | `E1303` | `for` expression did not produce a supported collection |
 | `E1401` | Two source allocations collided at one destination cell |
 | `E1402` | Sibling blocks have conflicting whole-row shift lanes |
+| `E1501` | Render context root is not a mapping |
+| `E1502` | Record key is not a string |
+| `E1503` | Context contains an unsupported value type |
+| `E1504` | Context contains a set or frozenset instead of an ordered collection |
+| `E1505` | Context contains a non-finite float or decimal |
+| `E1506` | Context contains a cyclic record or collection |
+| `E1507` | Context contains a timezone-aware datetime or time |
 | `E2104` | Merged range crosses a block or cell-shift lane boundary |
 | `E2105` | Conditional formatting would require an unsupported transform |
 | `E2106` | Data validation would require an unsupported transform |
@@ -329,6 +358,7 @@ Unknown directives, duplicate loop options, `direction="right"`, and shift modes
 | `E3202` | Input or output is not an `.xlsx` file |
 
 Diagnostics include at least the worksheet and cell, and lexical diagnostics also carry character offsets.
+Context diagnostics instead carry a canonical input path beginning with `context`.
 
 ## Not implemented as directives
 
@@ -352,3 +382,6 @@ The generated workbook [`../scratch/demo_template.xlsx`](../scratch/demo_templat
 ```powershell
 uv run python scratch/demo.py
 ```
+
+The executable [`../scratch/value_model_example.py`](../scratch/value_model_example.py) demonstrates
+canonical scalar, record, list, and table-shaped inputs plus representative rejection diagnostics.

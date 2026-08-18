@@ -1,0 +1,89 @@
+"""Show the canonical render-context contract without requiring an XLSX file.
+
+Run from the repository root with:
+
+    uv run python scratch/value_model_example.py
+"""
+
+from __future__ import annotations
+
+from datetime import date
+from decimal import Decimal
+
+from excel_template_writer import WorksheetTemplate, compile_sheet, render_sheet, validate_context
+
+CONTEXT = {
+    "report": {
+        "title": "August revenue",
+        "issued_on": date(2026, 8, 19),
+        "total": Decimal("2675.50"),
+    },
+    "regions": ["North", "South", "Central"],
+    "lines": [
+        {"description": "Consulting", "quantity": 2, "amount": Decimal("1500.00")},
+        {"description": "Support", "quantity": 3, "amount": Decimal("1175.50")},
+    ],
+}
+
+
+def _show_render(name: str, template: WorksheetTemplate) -> None:
+    plan = render_sheet(compile_sheet(template).require(), CONTEXT).require()
+    values = {cell.coordinate.a1: cell.value for cell in plan.cells}
+    print(f"{name}: {values}")
+
+
+def _show_valid_examples() -> None:
+    assert validate_context(CONTEXT) == ()
+
+    _show_render(
+        "single values and record access",
+        WorksheetTemplate.from_rows(
+            "Scalars",
+            [["{{ report.title }}", "{{ report.issued_on }}", "{{ report.total }}"]],
+        ),
+    )
+    _show_render(
+        "list of scalars",
+        WorksheetTemplate.from_rows(
+            "List",
+            [["{% for region in regions %}{{ region }}{% endfor %}"]],
+        ),
+    )
+    _show_render(
+        "table-shaped list of records",
+        WorksheetTemplate.from_rows(
+            "Rows",
+            [
+                [
+                    "{% for line in lines %}{{ line.description }}",
+                    "{{ line.quantity }}",
+                    "{{ line.amount }}{% endfor %}",
+                ]
+            ],
+        ),
+    )
+
+
+class UnadaptedDataFrame:
+    """Stand-in showing that library-specific objects need a later adapter."""
+
+
+def _show_rejections() -> None:
+    invalid_context = {
+        "unordered": {"North", "South"},
+        "nonfinite": float("inf"),
+        "unadapted_table": UnadaptedDataFrame(),
+    }
+    print("rejected values:")
+    for diagnostic in validate_context(invalid_context):
+        print(f"  {diagnostic}")
+
+
+def main() -> None:
+    print("No TypedValue wrappers are used; runtime categories validate permitted operations.")
+    _show_valid_examples()
+    _show_rejections()
+
+
+if __name__ == "__main__":
+    main()

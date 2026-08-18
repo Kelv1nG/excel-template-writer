@@ -29,3 +29,17 @@ The script does not contain a second renderer. It creates the fixture, calls
 `excel_template_writer.xlsx.render_workbook`, reloads both files with `openpyxl`, and asserts the
 demonstrated values, types, direct styles, row heights, column widths, styled blanks, and merged
 ranges.
+
+## Canonical value model example
+
+Run the smaller, workbook-free value example with:
+
+```powershell
+uv run python scratch/value_model_example.py
+```
+
+It demonstrates ordinary scalar values, a record, a list of scalars, and table-shaped data as a
+list of records. It also prints the path-aware diagnostics produced for an unordered set, a
+non-finite number, and an unadapted DataFrame-like object. The example intentionally uses no
+`TypedValue` wrapper: runtime value categories control permitted operations, while the template
+controls layout.
