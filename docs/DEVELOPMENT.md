@@ -2,7 +2,10 @@
 
 ## Status
 
-The repository has an executable Phase 0 language model: lexer, expression and directive parsers, spatial linker, validator, typed AST, safe evaluator, and pure layout planner. The `.xlsx` adapter is intentionally not implemented yet.
+The repository has an executable language model and a production-oriented `.xlsx` adapter. The
+adapter snapshots supported workbook presentation, invokes the pure compiler and layout planner,
+validates coordinate-dependent workbook features, writes a separate workbook atomically, and
+reopens the result for package-integrity verification.
 
 ## Runtime and package management
 
@@ -88,4 +91,3 @@ A change is complete when:
 - workbook changes pass save/reload checks;
 - supported checks run through `uv run`;
 - limitations and unsupported behavior fail explicitly or are documented.
-

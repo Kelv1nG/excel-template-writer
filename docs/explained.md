@@ -14,7 +14,9 @@ The architecture deliberately separates three questions:
 2. Where will every rendered cell go?
 3. How is that plan applied to an `.xlsx` package?
 
-The compiler answers the first question, the pure renderer and layout planner answer the second, and an XLSX adapter answers the third. The current package implements the first two. The production XLSX adapter is the next boundary; [`../scratch/demo.py`](../scratch/demo.py) is only a demonstration adapter.
+The compiler answers the first question, the pure renderer and layout planner answer the second,
+and the XLSX adapter answers the third. All three layers are now executable. The adapter remains
+strictly downstream of the plan and rejects workbook features it cannot transform safely.
 
 ## End-to-end flow
 
@@ -56,7 +58,10 @@ Each stage produces a representation suited to one job. Later stages consume tho
 - `Rectangle` represents an inclusive source region and provides containment, disjointness, width, height, and area operations.
 - `WorksheetTemplate` is an immutable mapping of coordinates to raw cell values.
 
-The model currently carries cell values and geometry. A production workbook reader will need a richer immutable workbook model for styles, row and column dimensions, merged ranges, formulas, and supported metadata. Those additions must not make the language core depend on live `openpyxl` objects.
+The pure model carries values, material blank cells, geometry, and merged ranges. The XLSX-owned
+snapshot model in [`xlsx/model.py`](../src/excel_template_writer/xlsx/model.py) additionally carries
+detached presentation data, row and column dimensions, formulas, hyperlinks, comments, and feature
+flags. These additions do not introduce `openpyxl` into the language core.
 
 ### Tokens and source spans
 
@@ -121,7 +126,9 @@ The hierarchy is important. A nested loop is evaluated inside its parent's lexic
 
 - the worksheet name;
 - final height and width;
-- an ordered collection of `PlannedCell` objects.
+- an ordered collection of `PlannedCell` objects;
+- explicit `PlannedRow` source-to-destination mappings;
+- explicit `PlannedMerge` source-to-destination mappings.
 
 Each `PlannedCell` records:
 
@@ -284,7 +291,7 @@ Current diagnostics cover lexical errors, invalid directives and expressions, un
 
 ## The XLSX boundary
 
-The intended production workbook path is:
+The production workbook path is:
 
 ```text
 openpyxl workbook
@@ -298,21 +305,26 @@ openpyxl workbook
 
 The writer must consume the plan. It must not parse directives, evaluate expressions, or decide where rows belong. Its responsibilities are mechanical workbook operations such as writing typed values and applying planned transformations to styles, dimensions, merges, and supported metadata.
 
-The scratch demo copies a useful subset of styles, dimensions, and contained merges using `PlannedCell.source_coordinate`. It is intentionally not a preservation contract and should not be moved into the production package unchanged.
+The adapter is implemented in [`xlsx/`](../src/excel_template_writer/xlsx). It snapshots every
+material cell, including styled blanks; copies direct cell formatting from each planned source;
+applies planned row properties and merges; writes atomically to a different path; and reloads the
+serialized package. [`../scratch/demo.py`](../scratch/demo.py) now exercises this production path.
 
 ## Current boundaries
 
-The executable core currently supports vertical repeats, row/cell shifts, scalar output, a small safe expression language, empty repeat placeholders, nested regions, and stacked conditions.
+The executable system currently supports vertical repeats, row/cell shifts, scalar output, a small
+safe expression language, empty repeat placeholders, nested regions, stacked conditions, direct
+cell formatting, styled blanks, row/column properties, and merged ranges.
 
 It does not yet provide:
 
-- a production `openpyxl` reader/writer;
 - horizontal repetition or column shifting;
 - explicit isolation regions;
-- formulas or formula translation;
+- formula translation; unaffected formulas are preserved and affected formulas are rejected;
 - loop metadata such as `loop.index`;
 - an `{% empty %}` repeat branch;
 - resource-limit enforcement;
-- the complete style/merge/workbook feature validation described by `SPEC.md`.
+- transformation of conditional formatting, data validation, native Excel Tables, drawings,
+  hyperlinks, or comments when their coordinates would change.
 
 These are extension points, not invitations to special-case the renderer. A new semantic feature should update the specification and then flow through parsing, a typed AST node, validation, evaluation/layout, diagnostics, and focused tests.

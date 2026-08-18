@@ -54,6 +54,23 @@ Invoice {{ invoice.number }}
 
 A collection cannot be written directly to a scalar cell. Use a `for` block to repeat cells, or use `join` when the desired result really is one text value.
 
+### Excel formatting
+
+Format placeholder cells in Excel exactly as their output should appear. Every rendered destination
+inherits the source cell's font, fill, border, alignment, number format, and protection. This also
+applies to blank formatted cells in a repeated rectangle.
+
+For example, keep `{{ line.amount }}` as a numeric expression and give its template cell an Excel
+currency number format. Repeated values remain numeric and each copy receives that format. The
+language does not infer currency, percentages, dates, table stripes, or first/last-row borders.
+
+Whole-row repeats also copy explicit row height and supported row properties. `shift="cells"`
+cannot repeat a custom row height because Excel row height applies to the entire worksheet row; the
+adapter rejects that combination rather than changing neighboring lanes.
+
+Merged ranges fully contained in a block repeat with it. A merge crossing a block or cell-shift
+lane boundary is invalid.
+
 ### Expression features
 
 The current expression language supports:
@@ -299,6 +316,17 @@ Unknown directives, duplicate loop options, `direction="right"`, and shift modes
 | `E1303` | `for` expression did not produce a supported collection |
 | `E1401` | Two source allocations collided at one destination cell |
 | `E1402` | Sibling blocks have conflicting whole-row shift lanes |
+| `E2104` | Merged range crosses a block or cell-shift lane boundary |
+| `E2105` | Conditional formatting would require an unsupported transform |
+| `E2106` | Data validation would require an unsupported transform |
+| `E2107` | Native Excel Table is unsupported by the current writer |
+| `E2108` | Chart, image, or drawing anchor is unsupported by the current writer |
+| `E2109` | Hyperlink would be copied or moved |
+| `E2110` | Comment would be copied or moved |
+| `E2111` | Cell shifting would repeat a worksheet-wide custom row height |
+| `E3101` | Formula would require copying, movement, or translation |
+| `E3201` | Input and output resolve to the same path |
+| `E3202` | Input or output is not an `.xlsx` file |
 
 Diagnostics include at least the worksheet and cell, and lexical diagnostics also carry character offsets.
 
