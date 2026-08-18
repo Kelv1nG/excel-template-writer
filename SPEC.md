@@ -215,35 +215,93 @@ The transformation is used consistently for cells, merges, row heights, column w
 
 ## 9. Data and type system
 
-The render context is a mapping from string names to supported values.
+The interpreter consumes one canonical, language-neutral value tree. The render context is its
+root: a mapping from string names to canonical values. Template authors do not declare input types
+and callers do not wrap ordinary values in labels such as `TypedValue(value, "table")`.
 
-### 9.1 Supported values
+Runtime types determine which expression operations are valid. They never determine worksheet
+layout. Template syntax and rectangular geometry decide whether the same ordered collection is
+rendered as a one-cell list, conventional table body, multi-row cards, or another repeated block.
 
-- null
+### 9.1 Canonical scalar values
+
+- `null`
 - string
 - boolean
 - integer
 - finite floating-point number
-- decimal number
+- finite decimal number
 - date
-- datetime
-- time, if `openpyxl` round-tripping is reliable
-- mapping with string keys
-- ordered collection of supported values
+- timezone-naive datetime
+- timezone-naive time
 
-Platform-specific objects must be normalized before expression evaluation. Pandas data frames, ORM models, query objects, and arbitrary iterators are not part of the core language contract.
+NaN, positive infinity, and negative infinity are not canonical numeric values. Timezone-aware
+datetime and time values must be converted under a platform policy before rendering because XLSX
+does not retain their timezone semantics.
 
-Collections are ordered, and iteration preserves their supplied order. The core language has no sorting operation in the first release. The platform must prepare the final order before rendering.
+### 9.2 Records and ordered collections
 
-### 9.2 Cell assignment
+A record is a mapping whose keys are strings and whose values are canonical values. Property syntax
+such as `customer.name` reads record keys; it does not invoke attributes on arbitrary objects.
 
-- A sole expression preserves its scalar type.
+An ordered collection is a finite Python-style list or tuple of canonical values. Collection order
+is preserved exactly. Sets and frozensets are rejected because they are not a deterministic input
+contract. Generators, cursors, query objects, and other arbitrary iterators are rejected because the
+complete render must be validated and measured before workbook mutation.
+
+Collections may contain scalars, records, other ordered collections, or a mixture of canonical
+values. A list of records is table-shaped data, but it is not a distinct semantic `table` type. Its
+template repeat rectangle controls its presentation.
+
+The canonical tree must be acyclic. Reusing one record or collection in multiple branches is
+allowed; a reference that leads back to one of its ancestors is rejected.
+
+### 9.3 Platform adapters and tabular data
+
+Platform-specific values are normalized before expression evaluation. Pandas and Polars data
+frames, Arrow tables or batches, DuckDB results, ORM models, and similar objects are not canonical
+core values. A platform-facing API may select a registered adapter from the concrete runtime type,
+but the adapter must produce the canonical value tree before invoking the interpreter.
+
+A tabular adapter must:
+
+- preserve input row order;
+- require unique string column names;
+- omit an index unless the platform explicitly materializes it as a column;
+- convert library-specific null, NaN, and not-a-time sentinels to `null`;
+- convert library-specific scalar objects to canonical scalar values;
+- reject values whose timezone, nested-object, or other semantics cannot be preserved.
+
+Adapters are an integration concern. Their presence does not allow the core to infer headers,
+sorting, grouping, layout, or a special table rendering mode.
+
+### 9.4 Rejection boundary
+
+The following are not canonical values:
+
+- mappings with non-string keys;
+- sets and frozensets;
+- arbitrary iterators or generators;
+- non-finite floating-point or decimal numbers;
+- timezone-aware datetime or time values;
+- bytes, complex numbers, functions, modules, and arbitrary class instances;
+- cyclic records or collections;
+- unadapted platform-specific tabular or model objects.
+
+Canonical-context validation reports stable diagnostics with a path such as
+`context.lines[2].amount`. It validates the entire supplied context, including values unused by a
+particular template, before evaluation begins.
+
+### 9.5 Cell assignment
+
+- A sole expression preserves its canonical scalar type.
 - Mixed literal and expression content is converted to text.
 - `null` produces a blank cell by default.
 - A collection or mapping used as a scalar is a type error unless passed through a registered formatting filter.
-- NaN and infinity require an explicit policy because they are not ordinary Excel numeric values.
+- A `for` expression requires an ordered collection; it does not iterate record keys.
+- The core language has no sorting operation in the first release. The platform prepares final order.
 
-### 9.3 Missing values
+### 9.6 Missing values
 
 A missing name or property is an error by default. A `default` filter may handle absence intentionally:
 
