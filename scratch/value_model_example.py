@@ -10,7 +10,14 @@ from __future__ import annotations
 from datetime import date
 from decimal import Decimal
 
-from excel_template_writer import WorksheetTemplate, compile_sheet, render_sheet, validate_context
+from excel_template_writer import (
+    TypeAdapter,
+    WorksheetTemplate,
+    compile_sheet,
+    normalize_context,
+    render_sheet,
+    validate_context,
+)
 
 CONTEXT = {
     "report": {
@@ -64,15 +71,52 @@ def _show_valid_examples() -> None:
     )
 
 
-class UnadaptedDataFrame:
-    """Stand-in showing that library-specific objects need a later adapter."""
+class DataFrameLike:
+    """Small stand-in for a pandas, Polars, Arrow, or DuckDB result."""
+
+    def __init__(self, rows: list[dict[str, object]]) -> None:
+        self.rows = rows
+
+
+def _show_immutable_normalization() -> None:
+    raw = {"report": {"title": "Original"}, "regions": ["North", "South"]}
+    normalized = normalize_context(raw).require()
+    raw["report"]["title"] = "Changed after normalization"
+    raw["regions"].append("Central")
+    print(f"immutable snapshot: {normalized}")
+
+
+def _show_caller_supplied_adapter() -> None:
+    frame = DataFrameLike(
+        [
+            {"description": "Implementation", "amount": Decimal("900.00")},
+            {"description": "Support", "amount": Decimal("100.00")},
+        ]
+    )
+    adapter = TypeAdapter(DataFrameLike, lambda value: value.rows, name="dataframe-like")
+    template = WorksheetTemplate.from_rows(
+        "Adapted rows",
+        [
+            [
+                "{% for line in lines %}{{ line.description }}",
+                "{{ line.amount }}{% endfor %}",
+            ]
+        ],
+    )
+    plan = render_sheet(
+        compile_sheet(template).require(),
+        {"lines": frame},
+        adapters=(adapter,),
+    ).require()
+    values = {cell.coordinate.a1: cell.value for cell in plan.cells}
+    print(f"caller-supplied adapter: {values}")
 
 
 def _show_rejections() -> None:
     invalid_context = {
         "unordered": {"North", "South"},
         "nonfinite": float("inf"),
-        "unadapted_table": UnadaptedDataFrame(),
+        "unadapted_table": DataFrameLike([]),
     }
     print("rejected values:")
     for diagnostic in validate_context(invalid_context):
@@ -82,6 +126,8 @@ def _show_rejections() -> None:
 def main() -> None:
     print("No TypedValue wrappers are used; runtime categories validate permitted operations.")
     _show_valid_examples()
+    _show_immutable_normalization()
+    _show_caller_supplied_adapter()
     _show_rejections()
 
 

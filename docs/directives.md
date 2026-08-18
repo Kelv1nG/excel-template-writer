@@ -105,13 +105,19 @@ Runtime types determine which expression operations are legal. Template syntax d
 presentation. For example, the same list of records may be rendered by a one-row repeat as a table
 body or by a multi-row repeat as cards.
 
-Sets, generators, non-string record keys, non-finite numbers, timezone-aware temporal values,
-cycles, arbitrary objects, and unadapted DataFrames are rejected before evaluation. Diagnostics
-name the input path, for example `context.lines[2].amount`.
+The engine normalizes the complete input into an immutable snapshot before evaluating any sheet.
+Records become read-only mappings and lists or tuples become tuples. This prevents caller-side
+mutation from changing one render halfway through. Sets, generators, non-string record keys,
+non-finite numbers, timezone-aware temporal values, cycles, arbitrary objects, and unadapted
+DataFrames are rejected. Diagnostics name the input path, for example
+`context.lines[2].amount`.
 
-Pandas, Polars, Arrow, DuckDB, ORM, and similar objects belong behind platform adapters. An adapter
-must convert them into ordinary string-keyed records and ordered collections before rendering.
-Adapter implementation is a later milestone; the current API rejects those objects explicitly.
+Pandas, Polars, Arrow, DuckDB, ORM, and similar objects belong behind caller-supplied
+`TypeAdapter` instances. An adapter converts one declared runtime type into ordinary string-keyed
+records and ordered collections; its output is normalized recursively. Adapters cannot override
+canonical values, and ambiguous, duplicate, failing, or cyclic conversions are explicit errors.
+The core supplies this adapter mechanism but does not yet bundle integrations for particular data
+libraries.
 
 Private names or keys beginning with `_`, imports, assignment, comprehensions, lambdas, and arbitrary function or method calls are prohibited.
 
@@ -345,6 +351,10 @@ Unknown directives, duplicate loop options, `direction="right"`, and shift modes
 | `E1505` | Context contains a non-finite float or decimal |
 | `E1506` | Context contains a cyclic record or collection |
 | `E1507` | Context contains a timezone-aware datetime or time |
+| `E1510` | More than one adapter is registered for the same source type |
+| `E1511` | Unrelated adapters match a value, so no unique most-specific adapter exists |
+| `E1512` | A value adapter raised an exception |
+| `E1513` | Adapter conversion formed a direct or indirect cycle |
 | `E2104` | Merged range crosses a block or cell-shift lane boundary |
 | `E2105` | Conditional formatting would require an unsupported transform |
 | `E2106` | Data validation would require an unsupported transform |

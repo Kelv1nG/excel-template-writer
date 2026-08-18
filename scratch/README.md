@@ -38,8 +38,9 @@ Run the smaller, workbook-free value example with:
 uv run python scratch/value_model_example.py
 ```
 
-It demonstrates ordinary scalar values, a record, a list of scalars, and table-shaped data as a
-list of records. It also prints the path-aware diagnostics produced for an unordered set, a
-non-finite number, and an unadapted DataFrame-like object. The example intentionally uses no
+It demonstrates ordinary scalar values, a record, a list of scalars, table-shaped data as a list
+of records, the immutable normalized snapshot, and a caller-supplied adapter for a DataFrame-like
+object. It also prints the path-aware diagnostics produced for an unordered set, a non-finite
+number, and that same object when no adapter is supplied. The example intentionally uses no
 `TypedValue` wrapper: runtime value categories control permitted operations, while the template
 controls layout.

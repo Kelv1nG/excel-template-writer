@@ -53,7 +53,7 @@ uv run ty check
 
 Preserve these responsibilities:
 
-- canonical render-context validation and future platform adapters;
+- immutable canonical render-context normalization and caller-supplied platform adapters;
 - workbook reader and immutable workbook model;
 - cell lexer and expression/directive parser;
 - spatial marker linker and semantic validator;
@@ -66,7 +66,8 @@ The interpreter and layout layers must be testable without opening or saving an 
 
 ## Testing layers
 
-- Language unit tests: canonical values, tokens, grammar, expressions, scopes, AST, and diagnostics.
+- Language unit tests: normalization/adapters, canonical values, tokens, grammar, expressions,
+  scopes, AST, and diagnostics.
 - Spatial tests: rectangle pairing, containment, ambiguity, nesting, measurement, shifting, and collisions.
 - Workbook integration tests: typed cells, styles, dimensions, merged ranges, and save/reload integrity.
 - End-to-end fixtures: only for representative user-visible behavior spanning all layers.

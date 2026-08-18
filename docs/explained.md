@@ -33,7 +33,9 @@ flowchart LR
     end
 
     Model --> Lexer
-    Data["Normalized render context"] --> Renderer["AST evaluator and layout planner"]
+    RawData["Raw platform values"] --> Normalizer["Adapters + normalization"]
+    Normalizer --> Data["Immutable NormalizedContext"]
+    Data --> Renderer["AST evaluator and layout planner"]
     AST --> Renderer
     Renderer --> Plan["RenderPlan"]
     Plan --> Writer["Workbook writer / adapter"]
@@ -41,6 +43,7 @@ flowchart LR
     Writer --> Output["New rendered .xlsx"]
 
     Compile -. "errors" .-> Diagnostics["Structured diagnostics"]
+    Normalizer -. "errors" .-> Diagnostics
     Renderer -. "errors" .-> Diagnostics
 ```
 
@@ -54,23 +57,37 @@ Each stage produces a representation suited to one job. Later stages consume tho
 
 [`values.py`](../src/excel_template_writer/values.py) defines the pure input boundary. A canonical
 context is a string-keyed mapping containing supported scalar values, string-keyed records, and
-finite ordered lists or tuples. It contains no `openpyxl`, DataFrame, ORM, cursor, or arbitrary
+finite ordered collections. It contains no `openpyxl`, DataFrame, ORM, cursor, or arbitrary
 iterator objects.
 
-`validate_context()` walks the complete tree before evaluation. It reports all detected problems
-with stable codes and paths such as `context.lines[2].amount`, rejects cycles while allowing a
-shared subtree, and does not mutate caller-owned data. `render_sheet()` enforces this boundary for
-the pure API; `render_workbook()` performs the same check once before reading, planning, or writing
-a workbook.
+`normalize_context()` walks the complete raw tree before evaluation. It recursively copies records
+into read-only mappings and lists or tuples into tuples, retaining supported immutable scalar
+values. The resulting `NormalizedContext` is an immutable snapshot: later mutations to caller data
+cannot change an in-progress render. It reports all safely independent problems with stable codes
+and paths such as `context.lines[2].amount`, rejects cycles while allowing a shared subtree, and
+returns no context if any diagnostic exists. `validate_context()` is the no-adapter compatibility
+check built on this same operation.
+
+`render_sheet()` normalizes a raw context automatically, but accepts an existing
+`NormalizedContext` without traversing it again. `render_workbook()` normalizes once and reuses the
+same snapshot for every worksheet before the writer mutates a workbook.
 
 Value categories permit operations but do not choose layout. A scalar may occupy a sole-expression
 cell, a record supports mapping-property access, and a list or tuple may drive a `for` node. A list
 of records has no special `table` tag: the source rectangle determines whether it appears as table
 rows, cards, or another repeated presentation.
 
-Library-specific tabular conversion remains outside the core. Future pandas, Polars, Arrow, or
-DuckDB adapters will produce this same canonical tree before evaluation; they will not add layout
-decisions to the renderer.
+Caller-supplied `TypeAdapter` objects convert non-canonical runtime types before evaluation. They
+are scoped to one normalization or render call; there is no process-global registry. Canonical
+types are recognized first, so adapters cannot override strings, mappings, or ordered collections.
+For a non-canonical value, resolution chooses the unique most-specific registered source type and
+rejects duplicate or unrelated matches rather than depending on registration order. Converter
+output is recursively normalized, and exceptions, invalid output, and conversion cycles retain the
+original context path.
+
+This foundation has no dependency on a particular data library. Future bundled pandas, Polars,
+Arrow, or DuckDB adapters will construct `TypeAdapter` values that produce the same canonical tree;
+they will not add layout decisions to the renderer.
 
 ### Worksheet model
 
@@ -339,8 +356,8 @@ serialized package. [`../scratch/demo.py`](../scratch/demo.py) now exercises thi
 
 The executable system currently supports vertical repeats, row/cell shifts, scalar output, a small
 safe expression language, empty repeat placeholders, nested regions, stacked conditions, direct
-cell formatting, styled blanks, row/column properties, merged ranges, and strict canonical-context
-validation.
+cell formatting, styled blanks, row/column properties, merged ranges, immutable context
+normalization, and caller-supplied type adapters.
 
 It does not yet provide:
 
@@ -350,7 +367,7 @@ It does not yet provide:
 - loop metadata such as `loop.index`;
 - an `{% empty %}` repeat branch;
 - resource-limit enforcement;
-- pandas, Polars, Arrow, DuckDB, ORM, or other platform-value adapters;
+- bundled pandas, Polars, Arrow, DuckDB, ORM, or other library-specific adapters;
 - transformation of conditional formatting, data validation, native Excel Tables, drawings,
   hyperlinks, or comments when their coordinates would change.
 

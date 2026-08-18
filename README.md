@@ -41,23 +41,39 @@ Compilation and rendering return structured diagnostics; `.require()` raises an 
 
 Render contexts use ordinary Python values—no `TypedValue` wrapper is required. Supported values
 are null, strings, booleans, integers, finite floats and decimals, timezone-naive dates/times,
-string-keyed mappings, and ordered lists or tuples. The complete context is validated before
-evaluation, with errors reported at paths such as `context.rows[2].amount`.
+string-keyed mappings, and ordered lists or tuples. Before evaluation, `normalize_context()` makes
+an immutable snapshot in which records are read-only mappings and lists become tuples. Errors are
+aggregated at paths such as `context.rows[2].amount`; a failed result contains no partial context.
 
 ```python
-from excel_template_writer import validate_context
+from excel_template_writer import normalize_context
 
 context = {
     "title": "Revenue",
     "regions": ["North", "South"],
     "rows": [{"description": "Service", "amount": 125}],
 }
-assert validate_context(context) == ()
+normalized = normalize_context(context).require()
 ```
 
 A list of records is table-shaped input, not a special table type. Template directives and their
 rectangles decide whether those records render as rows, cards, or another layout. DataFrames and
-other library-specific objects require a platform adapter; those adapters are not implemented yet.
+other library-specific objects can be converted by caller-supplied adapters without adding those
+libraries to the core package:
+
+```python
+from excel_template_writer import TypeAdapter, normalize_context
+
+frame_adapter = TypeAdapter(MyFrame, lambda frame: frame.to_dicts())
+normalized = normalize_context(
+    {"rows": my_frame},
+    adapters=(frame_adapter,),
+).require()
+```
+
+Adapters are scoped to one call. Canonical values always keep their built-in meaning, and adapter
+output is recursively normalized. Concrete pandas, Polars, Arrow, and DuckDB adapters are not
+bundled yet.
 
 Render a workbook to a separate output path with:
 
