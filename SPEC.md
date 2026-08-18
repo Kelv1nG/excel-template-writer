@@ -310,7 +310,11 @@ Full formula support may be designed later as a separate transformation pass ove
 
 ### 13.1 Styles
 
-Repeated cells copy:
+The template cell is authoritative for presentation. Every rendered cell copies the effective
+direct formatting of its source template cell. The renderer does not infer formatting from the
+value, field name, headers, or neighboring cells.
+
+Repeated and shifted cells copy:
 
 - font
 - fill
@@ -318,18 +322,64 @@ Repeated cells copy:
 - alignment
 - number format
 - protection
-- hyperlink, subject to a defined reference policy
-- comment/note only if explicitly supported
+
+A formatted blank cell is a material template cell. It participates in source-to-destination
+mapping and is copied even though its value is blank. This is required for continuous fills,
+borders, alignment, protected entry areas, and merged-range presentation.
+
+Formatting is copied exactly per source cell and per repeated instance. The engine does not
+recompute outer borders, alternating stripes, first/last-row styles, or other contextual table
+effects. Such behavior requires an explicit future language feature rather than inference.
+
+The source number format remains authoritative for rendered values. Authors format placeholder
+cells as dates, currency, percentages, or other Excel formats in the template. The renderer does
+not select a number format from a variable name or runtime type.
 
 Styles should be reused/deduplicated where possible to prevent excessive workbook style records.
+The first production adapter guarantees the effective cell appearance, not preservation of named
+style authoring identity.
 
-### 13.2 Merged cells
+### 13.2 Row and column dimensions
+
+For `shift="rows"`, every output row maps to a source row. Repeated rows copy explicit height,
+hidden state, outline level, collapsed state, and safely representable row-level direct style.
+Static rows retain the properties of their mapped source rows after movement.
+
+Automatic/default row height remains automatic. The engine does not measure text or calculate an
+auto-fit height.
+
+`shift="cells"` cannot apply different row heights to independent column lanes because Excel row
+height is worksheet-wide. A cell-shift block that would repeat a row with an explicit custom height
+is rejected in the first production adapter. It may use the worksheet's existing/default row
+heights instead.
+
+Vertical rendering does not create columns. Existing column width, hidden state, outline level,
+collapsed state, best-fit state, and safely representable column-level style are preserved. A later
+horizontal layout phase must introduce explicit source-to-destination column mappings.
+
+### 13.3 Merged cells
 
 - A merge fully contained within a repeated block is reproduced for every block instance.
 - A merge outside a block is transformed when its cells are shifted.
 - A block boundary or shift lane may not split a merged range.
 - Only the top-left cell of a merged range may receive a rendered value.
 - Overlapping destination merges are fatal layout errors.
+
+Merged ranges are explicit entries in the render plan. The workbook writer must not infer merge
+copies from blank cells or from the final value grid.
+
+### 13.4 Range-bound and unsupported workbook formatting
+
+Conditional formatting and data validation are range-bound workbook features, not direct cell
+styles. In the first production adapter they are preserved only when the sheet contains no
+structural layout transformation. If a repeat or condition could require a range to move, copy,
+resize, contract, or split, rendering is rejected until that feature has its own validated render
+plan representation.
+
+The same safety rule applies to other coordinate-dependent workbook objects. Native Excel Tables,
+drawings, charts, images, and unsupported anchors are rejected by the first production adapter.
+Hyperlinks and comments are preserved only when their cell has exactly one unchanged destination;
+copying or moving them is rejected until an explicit policy is implemented.
 
 ## 14. Conditions and advanced constructs
 
