@@ -275,7 +275,36 @@ A tabular adapter must:
 Adapters are an integration concern. Their presence does not allow the core to infer headers,
 sorting, grouping, layout, or a special table rendering mode.
 
-### 9.4 Rejection boundary
+Adapters are caller-supplied and scoped to one normalization or render operation. The core has no
+mutable process-global adapter registry. Each adapter declares one source runtime type and a pure
+conversion function. Canonical values are recognized before adapter lookup, so an adapter cannot
+override the meaning of strings, numbers, records, lists, or tuples.
+
+For a non-canonical value, adapter resolution selects the unique most-specific matching source
+type. Exact-type registration is more specific than a base type. Duplicate registrations for the
+same source type and matches through unrelated source types are errors; registration order is never
+a tie-breaker.
+
+Adapter output is recursively normalized at the same context path. It may contain other adapted
+values. An adapter exception, unsupported output, direct or indirect conversion cycle, or ambiguous
+adapter match produces a diagnostic and no normalized context.
+
+### 9.4 Normalization result and immutability
+
+`normalize_context(raw_context, adapters)` validates and converts the complete input before template
+evaluation. On success it returns an immutable normalized context:
+
+- records become read-only mappings;
+- lists and tuples become tuples;
+- canonical scalar objects are retained;
+- shared input subtrees may be copied, and input object identity is not part of the language;
+- caller-owned mappings and lists are never mutated.
+
+Normalization aggregates independent problems where traversal can continue safely. A result with
+any diagnostic contains no usable context. Rendering entry points normalize raw input automatically;
+an already-normalized context can be reused across worksheets without another traversal.
+
+### 9.5 Rejection boundary
 
 The following are not canonical values:
 
@@ -292,7 +321,7 @@ Canonical-context validation reports stable diagnostics with a path such as
 `context.lines[2].amount`. It validates the entire supplied context, including values unused by a
 particular template, before evaluation begins.
 
-### 9.5 Cell assignment
+### 9.6 Cell assignment
 
 - A sole expression preserves its canonical scalar type.
 - Mixed literal and expression content is converted to text.
@@ -301,7 +330,7 @@ particular template, before evaluation begins.
 - A `for` expression requires an ordered collection; it does not iterate record keys.
 - The core language has no sorting operation in the first release. The platform prepares final order.
 
-### 9.6 Missing values
+### 9.7 Missing values
 
 A missing name or property is an error by default. A `default` filter may handle absence intentionally:
 
@@ -609,9 +638,10 @@ File paths are convenience adapters, not the core abstraction.
 The core operations are conceptually:
 
 ```text
+normalize_context(raw_context, adapters) -> NormalizationResult
 compile(template) -> CompiledTemplate
 validate(compiled_template, optional_schema) -> Diagnostics
-render(compiled_template, context, options) -> RenderResult
+render(compiled_template, normalized_context, options) -> RenderResult
 ```
 
 A compiled template may be cacheable if it does not retain mutable `openpyxl` objects.
