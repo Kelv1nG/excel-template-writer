@@ -1,26 +1,31 @@
-# Capability demo
+# Visual formatting acceptance demo
 
-Run the throwaway demonstration from the repository root:
+Run the demo from the repository root:
 
 ```powershell
 uv run python scratch/demo.py
 ```
 
-It recreates two files:
+The command recreates two files:
 
 - `demo_template.xlsx` — the authored workbook with visible `{% ... %}` and `{{ ... }}` tags;
-- `demo_output.xlsx` — the rendered workbook.
+- `demo_output.xlsx` — the rendered workbook produced by the production XLSX adapter.
 
-The workbook uses one sheet per behavior so the source geometry remains easy to inspect:
+Open the two workbooks side by side and begin on the `START HERE` sheet. The numbered sheets
+isolate the current presentation and layout contracts:
 
-- typed scalar cells, mixed text, lookups, comparisons, and implemented filters;
-- a normal table-style row repeat using whole-row shifting;
-- a one-cell list;
-- two independently expanding `shift="cells"` lists;
-- the formatted placeholder retained for an empty collection;
-- a two-row repeated card with a contained merged title;
-- nested repeats;
-- true, false, and omitted conditional branches;
-- a summary of capabilities that are not implemented yet.
+1. a styled rectangular table body repeated as complete rows;
+2. multi-row cards with repeated merged headers;
+3. the single formatted placeholder retained by an empty repeat;
+4. independently growing `shift="cells"` lanes;
+5. differently styled conditional branches that compact after selection;
+6. native date, number, boolean, and string values with template-owned formats;
+7. nested repeats whose row styles and heights follow measured group sizes.
 
-The script is intentionally not the production workbook adapter. It uses the real compiler and render planner, applies the resulting source-to-destination mapping to a new workbook, and reopens the saved file to verify the demonstrated values, types, styles, and merges.
+The intentionally blank gold cells make blank-cell style copying easy to see. Gold footer bands
+show where content below a block lands after expansion or compaction.
+
+The script does not contain a second renderer. It creates the fixture, calls
+`excel_template_writer.xlsx.render_workbook`, reloads both files with `openpyxl`, and asserts the
+demonstrated values, types, direct styles, row heights, column widths, styled blanks, and merged
+ranges.
