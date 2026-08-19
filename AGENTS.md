@@ -36,7 +36,9 @@
 - Keep input preprocessing separate from rendering. Sorting, grouping, joining, keyed merging, and reconciliation are not renderer responsibilities.
 - Preserve user-authored changes and keep unrelated edits out of a change.
 - Add the smallest tests that prove the contract at the lowest applicable layer.
+- Every user-visible language, layout, adapter, formatting, or XLSX feature change must add or
+  update executable Python and matching template/output workbooks under `samples/`. Samples follow
+  the current implementation; they do not override `SPEC.md`.
 - Use stable diagnostic codes and include worksheet/cell source locations.
 - Do not edit binary `.xlsx` fixtures as ordinary source files.
 - Before handing off, run available focused checks and then the full configured suite. State clearly when tooling or tests have not been configured yet.
-

@@ -12,6 +12,8 @@ This is the author-facing reference for the currently executable template langua
 | `{% if condition %}` | Opening directive | Start the true rectangle of a conditional block. |
 | `{% else %}` | Branch directive | End the true rectangle and introduce the false rectangle. |
 | `{% endif %}` | Closing directive | Mark the bottom-right corner of a conditional block. |
+| `{% region %}` | Opening directive | Start an explicit vertical layout boundary. |
+| `{% endregion %}` | Closing directive | Mark the bottom-right corner of a region. |
 
 Output tags use `{{ ... }}`. Directives use `{% ... %}`. Output tags produce values; directives control rectangular worksheet structure and are removed from the rendered cells.
 
@@ -266,6 +268,58 @@ C4: {% for right in right_items shift="cells" %}{{ right }}{% endfor %}
 
 Content below column A moves as the left list grows; content below column C moves independently as the right list grows.
 
+## `region` and `endregion`
+
+### Syntax
+
+```text
+{% region [direction="down"] [shift="rows"|"cells"] %}
+...
+{% endregion %}
+```
+
+A region is an explicit rectangular layout container. Its opening tag is the top-left corner and
+its closing tag is the bottom-right corner. It introduces no variable and does not inspect the
+cells around it to infer a boundary.
+
+`direction="down"` is the default and only implemented direction. One region has one growth axis;
+horizontal and mixed-direction regions are rejected rather than guessed.
+
+### Measuring child layouts together
+
+The source rectangle reserves a minimum amount of space. The renderer first completes all direct
+children inside it, then exposes the completed region to the surrounding worksheet as one unit.
+Side-by-side child lanes use the tallest completed bottom edge, while vertically stacked children
+accumulate their actual movement. Nested regions are measured from the inside out.
+
+For a region from `A1:J10`, child output ending on or above row 10 causes no movement outside the
+region. If its completed content ends on row 14, the region has four rows of external growth.
+
+### `shift="rows"`
+
+This is the default. External growth inserts complete worksheet rows below the region's source
+bottom. Content in every column moves together.
+
+### `shift="cells"`
+
+External growth moves only cells below the source bottom in the region's exact column band. For an
+`A1:J10` region that grows by four rows, `A20:J20` moves to `A24:J24`, while `K20:P20` stays on row
+20. This is the explicit way to say that several internal lanes form one visual section without
+moving a neighboring section.
+
+```text
+A1: {% region shift="cells" %}
+A2:C2: first repeated lane, using shift="cells"
+D2:F2: second repeated lane, using shift="cells"
+G2:I2: third repeated lane, using shift="cells"
+J10: {% endregion %}
+```
+
+The region markers disappear. Static and formatted blank cells below the region move only when
+they are in the affected band. A merged range may not cross the region rectangle or the edge of a
+cell-shift band. Because Excel row heights apply across a complete worksheet row, cell-band
+movement does not translate row dimensions independently.
+
 ## `if`, `else`, and `endif`
 
 Conditions use vertically stacked, equal-width branch rectangles.
@@ -311,7 +365,9 @@ A one-cell condition is also legal:
 
 An `if` directive does not add variables to scope. Its expression can read the surrounding context, including variables from containing loops.
 
-Conditions do not accept `direction` or `shift` options. At the worksheet root they use row shifting. Inside a loop they inherit the containing loop's shift policy, so a condition in a `shift="cells"` lane does not move unrelated neighboring columns.
+Conditions do not accept `direction` or `shift` options. At the worksheet root they use row
+shifting. Inside a loop or region they inherit the nearest container's shift policy, so a
+condition in a `shift="cells"` lane does not move unrelated neighboring columns.
 
 Nested blocks must be entirely inside one branch. A loop or condition cannot cross the boundary between the true and false rectangles.
 
@@ -339,7 +395,9 @@ Two blocks may be nested or disjoint. They cannot overlap like offset rectangles
 
 ### Missing closing marker
 
-Every `for` needs one compatible `endfor`, and every `if` needs one compatible `endif`. The compiler reports `E1201` when it cannot form a complete spatial pairing.
+Every `for` needs one compatible `endfor`, every `if` needs one compatible `endif`, and every
+`region` needs one compatible `endregion`. The compiler reports `E1201` when it cannot form a
+complete spatial pairing.
 
 ### Collection in a scalar cell
 
@@ -351,7 +409,8 @@ This is an error. Use a loop to create cells or `join` to intentionally produce 
 
 ### Unknown or unsupported options
 
-Unknown directives, duplicate loop options, `direction="right"`, and shift modes other than `rows` or `cells` are rejected during compilation.
+Unknown directives, duplicate loop or region options, `direction="right"`, and shift modes other
+than `rows` or `cells` are rejected during compilation.
 
 ## Diagnostic codes
 
@@ -410,7 +469,6 @@ Context diagnostics instead carry a canonical input path beginning with `context
 The following syntax is not currently recognized:
 
 - `{% empty %}`;
-- `{% region %}` or another isolation-container directive;
 - `{% set %}`;
 - `{% include %}`, `{% import %}`, or macros;
 - `{% break %}` and `{% continue %}`;
@@ -422,7 +480,17 @@ Excel formulas are also outside the first release. Do not treat unsupported synt
 
 ## Working examples
 
-The generated workbook [`../scratch/demo_template.xlsx`](../scratch/demo_template.xlsx) contains visible tags for every currently demonstrated construct. Compare it with [`../scratch/demo_output.xlsx`](../scratch/demo_output.xlsx), or regenerate both with:
+The maintained [`../samples/README.md`](../samples/README.md) catalog contains focused, executable
+Python examples with matching template and rendered workbooks for every current feature area.
+Regenerate the complete set with:
+
+```powershell
+uv run --all-extras python -m samples.generate_all
+```
+
+The generated workbook [`../scratch/demo_template.xlsx`](../scratch/demo_template.xlsx) is a broader
+acceptance playground containing visible tags for every currently demonstrated construct. Compare it
+with [`../scratch/demo_output.xlsx`](../scratch/demo_output.xlsx), or regenerate both with:
 
 ```powershell
 uv run python scratch/demo.py

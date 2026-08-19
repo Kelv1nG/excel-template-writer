@@ -14,7 +14,11 @@ A2: {% for row in rows %}{{ row.description }}
 B2: {{ row.amount }}{% endfor %}
 ```
 
-The two directive cells are opposite corners of one rectangular repeat body. Vertical growth inserts whole rows by default; `shift="cells"` isolates growth to the block's columns. Rectangular `if`/`else` blocks use the same spatial model.
+The two directive cells are opposite corners of one rectangular repeat body. Vertical growth
+inserts whole rows by default; `shift="cells"` isolates growth to the block's columns. Rectangular
+`if`/`else` blocks use the same spatial model. Explicit `{% region %}` / `{% endregion %}`
+rectangles measure several child layouts as one unit and control whether external growth moves
+complete rows or only the region's declared column band.
 
 ## Current API
 
@@ -131,6 +135,8 @@ Documentation:
 - [`docs/directives.md`](docs/directives.md) — current author-facing syntax and directives;
 - [`docs/explained.md`](docs/explained.md) — holistic compiler, AST, renderer, and adapter architecture;
 - [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) — contributor workflow.
+- [`samples/README.md`](samples/README.md) — executable Python and template/output workbooks for
+  every maintained feature group.
 
 Affected formulas, conditional formatting, data validation, native Excel Tables, drawings, and
 other unsupported coordinate-dependent features are rejected explicitly rather than silently

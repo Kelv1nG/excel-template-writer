@@ -38,8 +38,8 @@ Run the complete local gate with:
 
 ```powershell
 uv run --all-extras pytest
-uv run --all-extras ruff check src tests
-uv run --all-extras ruff format --check src tests
+uv run --all-extras ruff check src tests samples scratch
+uv run --all-extras ruff format --check src tests samples scratch
 uv run --all-extras ty check
 ```
 
@@ -92,6 +92,30 @@ assert its stable diagnostic code and either its source location or canonical co
 - Reopen rendered workbooks and verify values, types, styles, dimensions, and merges.
 - Inspect OOXML parts only when the public workbook model cannot prove the behavior.
 
+## Maintained user samples
+
+`samples/` is the maintained, executable catalog of supported user-visible behavior. `scratch/`
+remains useful for exploratory or disposable demonstrations, but it does not satisfy sample
+coverage for a completed feature.
+
+Every user-visible language, layout, value-adapter, formatting, or XLSX feature change must add or
+update:
+
+- executable Python under `samples/` that builds and renders through the production API;
+- a visible-tag `*_template.xlsx` workbook;
+- the corresponding `*_output.xlsx` workbook;
+- save/reload assertions for the behavior being demonstrated; and
+- the catalog in `samples/README.md`.
+
+Regenerate the complete catalog with:
+
+```powershell
+uv run --all-extras python -m samples.generate_all
+```
+
+Samples depend on the current specification, implementation, and tests. They are explanatory
+artifacts, not a competing source of language semantics.
+
 ## Definition of done
 
 A change is complete when:
@@ -100,5 +124,6 @@ A change is complete when:
 - architecture boundaries remain intact;
 - valid, invalid, empty, boundary, and nesting cases are covered where relevant;
 - workbook changes pass save/reload checks;
+- user-visible features have matching maintained samples;
 - supported checks run through `uv run`;
 - limitations and unsupported behavior fail explicitly or are documented.

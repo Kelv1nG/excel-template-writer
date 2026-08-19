@@ -160,6 +160,7 @@ The engine does not call Python `eval`. Property lookup operates on mappings, pr
 
 - `ForDirective` and `EndForDirective`;
 - `IfDirective`, `ElseDirective`, and `EndIfDirective`.
+- `RegionDirective` and `EndRegionDirective`.
 
 At this point these objects are markers, not complete spatial blocks. A textual parser knows that a cell contains `endfor`; it cannot decide which `for` owns it until worksheet coordinates are considered.
 
@@ -168,6 +169,9 @@ At this point these objects are markers, not complete spatial blocks. A textual 
 [`ast.py`](../src/excel_template_writer/ast.py) contains the compiled spatial AST:
 
 - `CellNode` holds the typed parts remaining after directives are removed;
+- `StructuralNode` defines the shared geometry, children, shift policy, and source span expected by
+  structural AST nodes;
+- `RegionNode` owns an explicit rectangular measurement and external-movement boundary;
 - `ForNode` owns a rectangle, loop variable, collection expression, shift policy, and nested regions;
 - `IfNode` owns an overall rectangle, true and optional false rectangles, condition, inherited shift policy, and nested regions;
 - `CompiledSheet` owns immutable cells and the top-level region tree.
@@ -177,10 +181,9 @@ A representative tree looks like this:
 ```text
 CompiledSheet
 ├── static CellNodes
-└── ForNode: groups, rectangle A4:D6
-    ├── CellNodes evaluated in scope {group}
-    └── ForNode: group.items, rectangle A5:B5
-        └── CellNodes evaluated in scope {group, item}
+└── RegionNode: rectangle A4:J10, shift cells
+    ├── ForNode: left_items, rectangle A5:C5
+    └── ForNode: right_items, rectangle D5:F5
 ```
 
 The hierarchy is important. A nested loop is evaluated inside its parent's lexical scope and is measured before the parent is placed.
@@ -243,6 +246,9 @@ This pass also rejects:
 - a nested block that crosses an `if` branch boundary;
 - side-by-side siblings with overlapping source rows when either claims whole-row shifting.
 
+An explicit `RegionNode` participates in the same tree. Its opposite-corner markers are its exact
+source geometry; blanks, formatting, and worksheet used ranges do not affect it.
+
 ### 5. Freeze the result
 
 The final `CompiledSheet` is immutable. It can be rendered repeatedly with different data without reparsing the template. Compilation does not mutate a workbook and does not require render data.
@@ -272,6 +278,12 @@ The internal `render_area()` operation works in coordinates local to the current
 
 Because nested children finish first, a parent repeat knows the actual height of each rendered instance before stacking the instances.
 
+For a `RegionNode`, the same operation renders its source rectangle once. Its source height is the
+minimum allocation. Side-by-side cell-shift children therefore combine by maximum completed bottom
+edge, while stacked row-shift children accumulate. The parent then sees the completed region as one
+child and applies the region's external shift policy across either the entire row or the region's
+declared column band.
+
 ### Repeat evaluation
 
 For a `ForNode`, the renderer evaluates the collection expression. For each item it:
@@ -289,7 +301,8 @@ For an empty collection, the body is rendered once without binding the loop vari
 
 For an `IfNode`, the condition selects the true or false rectangle. Only that rectangle is rendered. If a false condition has no `else`, the node produces a zero-height block. The containing shift policy closes the removed space.
 
-Conditions have no author-facing `shift` option. At top level they shift rows. Inside a `shift="cells"` loop they inherit that lane isolation.
+Conditions have no author-facing `shift` option. At top level they shift rows. Inside a
+`shift="cells"` loop or region they inherit that lane isolation.
 
 ### Row shifting versus cell shifting
 
@@ -386,8 +399,9 @@ the hosting platform.
 
 ## Current boundaries
 
-The executable system currently supports vertical repeats, row/cell shifts, scalar output, a small
-safe expression language, empty repeat placeholders, nested regions, stacked conditions, direct
+The executable system currently supports vertical repeats, explicit vertical isolation regions,
+row/cell shifts, scalar output, a small safe expression language, empty repeat placeholders,
+nested regions, stacked conditions, direct
 cell formatting, styled blanks, row/column properties, merged ranges, immutable context
 normalization, caller-supplied type adapters, deterministic resource limits, and XLSX package
 preflight.
@@ -395,7 +409,7 @@ preflight.
 It does not yet provide:
 
 - horizontal repetition or column shifting;
-- explicit isolation regions;
+- horizontal or mixed-axis regions;
 - formula translation; unaffected formulas are preserved and affected formulas are rejected;
 - loop metadata such as `loop.index`;
 - an `{% empty %}` repeat branch;
