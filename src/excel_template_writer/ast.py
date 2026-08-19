@@ -33,17 +33,26 @@ class CellNode:
     parts: tuple[CellPart, ...]
 
 
-class RegionNode:
+class StructuralNode:
     rectangle: Rectangle
-    children: tuple[RegionNode, ...]
+    children: tuple[StructuralNode, ...]
     shift: str
     span: SourceSpan
 
 
 @dataclass(frozen=True)
-class ForNode(RegionNode):
+class RegionNode(StructuralNode):
     rectangle: Rectangle
-    children: tuple[RegionNode, ...]
+    children: tuple[StructuralNode, ...]
+    direction: str
+    shift: str
+    span: SourceSpan
+
+
+@dataclass(frozen=True)
+class ForNode(StructuralNode):
+    rectangle: Rectangle
+    children: tuple[StructuralNode, ...]
     variable: str
     iterable: Expression
     direction: str
@@ -52,9 +61,9 @@ class ForNode(RegionNode):
 
 
 @dataclass(frozen=True)
-class IfNode(RegionNode):
+class IfNode(StructuralNode):
     rectangle: Rectangle
-    children: tuple[RegionNode, ...]
+    children: tuple[StructuralNode, ...]
     condition: Expression
     true_rectangle: Rectangle
     false_rectangle: Rectangle | None
@@ -67,7 +76,9 @@ class CompiledSheet:
     template: WorksheetTemplate
     rectangle: Rectangle
     cells: Mapping[Coordinate, CellNode]
-    children: tuple[RegionNode, ...]
+    children: tuple[StructuralNode, ...]
 
     def __post_init__(self) -> None:
+        """Detach the compiled cell mapping from its mutable input mapping."""
+
         object.__setattr__(self, "cells", MappingProxyType(dict(self.cells)))

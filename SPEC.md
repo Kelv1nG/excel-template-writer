@@ -1,7 +1,7 @@
 # Excel Template Engine Specification
 
-Status: Draft 0.1
-Scope: Product and language design; not yet an implementation contract
+Status: Draft 0.2
+Scope: Normative product, language, and rendering contract
 
 ## 1. Purpose
 
@@ -174,7 +174,7 @@ This is the default for `direction="down"`. The engine inserts complete workshee
 
 For a collection of length `n`, the first item uses the source block and the engine inserts space for the remaining `n - 1` instances. A source block with multiple rows inserts the corresponding multiple of complete worksheet rows.
 
-Two sibling blocks whose source row spans overlap cannot independently use `shift="rows"`. Their insertions would both claim the same worksheet rows without an isolation boundary. Such siblings must use `shift="cells"`, or later be placed in an explicit region construct that defines how their completed layouts are combined. Validation rejects the ambiguous row-shift arrangement.
+Two sibling blocks whose source row spans overlap cannot independently use `shift="rows"`. Their insertions would both claim the same worksheet rows without an isolation boundary. Such siblings must use `shift="cells"`, or be placed in an explicit region construct that defines how their completed layouts are combined. Validation rejects the ambiguous row-shift arrangement.
 
 ### 8.2 `shift="columns"`
 
@@ -191,9 +191,33 @@ This mode supports independently growing blocks placed side by side, provided th
 
 ### 8.4 Explicit regions and isolation
 
-An explicit rectangular `region` construct will act as a layout container and isolation boundary. A child is measured and positioned inside its nearest region; the completed region is then handled as one unit by its parent.
+An explicit rectangular `region` is a layout container and isolation boundary. It uses the same opposite-corner marker model as other structural constructs:
 
-This provides a principled way to build independently growing side-by-side report sections. The exact author syntax and overflow policy for regions remain open design work; isolation must not be implemented through guessed blank areas.
+```text
+A1:  {% region direction="down" shift="cells" %}
+J10: {% endregion %}
+```
+
+The markers above define exactly `A1:J10`. Blank cells, styles, and worksheet used ranges never enlarge or shrink that source rectangle. Both markers are removed from rendered output.
+
+`direction="down"` is the default and the only supported region direction in the first usable release. A horizontal or mixed-axis child is invalid inside a vertical region. A single region cannot grow both down and right.
+
+The source rectangle is the region's minimum reserved allocation. Children are measured and positioned inside the region before the completed region is exposed to its parent:
+
+- side-by-side child lanes contribute their maximum completed bottom edge, not the sum of their heights;
+- vertically stacked children contribute their actual cumulative displacement;
+- nested regions are measured from the inside out;
+- output that fits inside the source rectangle consumes its reserved space and causes no external movement;
+- when child output extends below the source bottom, the region's external growth is the completed bottom edge minus the source bottom.
+
+The region's `shift` option controls only how that completed external growth affects cells outside the source rectangle:
+
+- `shift="rows"` is the default and shifts complete worksheet rows below the region's source bottom;
+- `shift="cells"` shifts only cells below the source bottom whose columns fall within the region's exact left-to-right column band. Cells in columns outside that band remain at their original rows.
+
+For example, a completed `A1:J10` region that requires four additional rows moves content at `A20:J20` to `A24:J24` when `shift="cells"`, while content at `K20:P20` remains on row 20. Content already inside `A1:J10` participates in the region's internal layout; the engine does not shift the whole source rectangle as one pre-existing slab.
+
+Children remain subject to the normal nested/disjoint rectangle rules. Partial overlaps, ambiguous marker pairing, output collisions, and merged ranges that cross a region or cell-shift boundary are errors. Row heights are worksheet-wide and cannot move independently for only part of a row; `shift="cells"` therefore moves cell content and cell formatting within its column band but does not translate worksheet row dimensions.
 
 ### 8.5 Empty collections
 
@@ -780,6 +804,7 @@ Phase 0 accepts a two-dimensional in-memory worksheet representation and produce
 
 - `direction="down"`
 - `shift="rows"` and `shift="cells"`
+- vertical `region` containers and explicit external shift boundaries
 - styles, row heights, and merges
 - empty collections and nested vertical repeats
 
@@ -795,7 +820,7 @@ Completion of Phase 3 constitutes the first usable language release.
 
 - `direction="right"`
 - `shift="columns"` and `shift="cells"`
-- side-by-side regions
+- horizontal region containers
 - mixed-direction nesting and collision rules
 
 ### Phase 5: richer reports
@@ -804,11 +829,9 @@ Completion of Phase 3 constitutes the first usable language release.
 - grouping/subtotals as justified by real templates
 - optional images and other explicitly supported workbook features
 
-## 21. Open design decision
+## 21. Resolved region design
 
-The following decision needs confirmation before this becomes version 1.0 of the language specification:
-
-1. What is the exact author syntax and overflow behavior for isolation regions?
+Vertical isolation regions use the explicit opposite-corner syntax and completed-layout behavior defined in section 8.4. Horizontal regions and mixed-direction nesting remain deferred to Phase 4; they must not be inferred from the vertical rules without a separate language-design review.
 
 ## 22. Library rationale and known constraints
 

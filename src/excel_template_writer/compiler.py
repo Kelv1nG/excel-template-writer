@@ -13,6 +13,7 @@ from excel_template_writer.ast import (
     IfNode,
     LiteralPart,
     RegionNode,
+    StructuralNode,
 )
 from excel_template_writer.diagnostics import (
     Diagnostic,
@@ -26,8 +27,10 @@ from excel_template_writer.directives import (
     ElseDirective,
     EndForDirective,
     EndIfDirective,
+    EndRegionDirective,
     ForDirective,
     IfDirective,
+    RegionDirective,
     parse_directive,
 )
 from excel_template_writer.expressions import ExpressionSyntaxError, parse_expression
@@ -47,6 +50,15 @@ class CompilationResult:
     diagnostics: tuple[Diagnostic, ...]
 
     def require(self) -> CompiledSheet:
+        """Return the compiled sheet or raise its diagnostics.
+
+        Returns:
+            The successfully compiled immutable sheet.
+
+        Raises:
+            TemplateCompilationError: If compilation produced no sheet.
+        """
+
         if self.compiled is None:
             raise TemplateCompilationError(self.diagnostics)
         return self.compiled
@@ -61,11 +73,15 @@ class _Marker:
 
     @property
     def is_opener(self) -> bool:
-        return isinstance(self.directive, (ForDirective, IfDirective))
+        """Return whether this marker opens a rectangular construct."""
+
+        return isinstance(self.directive, (ForDirective, IfDirective, RegionDirective))
 
     @property
     def is_closer(self) -> bool:
-        return isinstance(self.directive, (EndForDirective, EndIfDirective))
+        """Return whether this marker closes a rectangular construct."""
+
+        return isinstance(self.directive, (EndForDirective, EndIfDirective, EndRegionDirective))
 
 
 @dataclass(frozen=True)
@@ -82,18 +98,49 @@ class _RegionSpec:
 
     @property
     def rectangle(self) -> Rectangle:
+        """Return the source rectangle derived from the paired markers."""
+
         return self.pair.rectangle
 
 
 def _marker_kinds_match(opener: _Marker, closer: _Marker) -> bool:
+    """Return whether two markers are matching directive kinds.
+
+    Args:
+        opener: Candidate opening marker.
+        closer: Candidate closing marker.
+
+    Returns:
+        ``True`` for ``for/endfor``, ``if/endif``, or ``region/endregion``.
+    """
+
     return (
-        isinstance(opener.directive, ForDirective) and isinstance(closer.directive, EndForDirective)
-    ) or (
-        isinstance(opener.directive, IfDirective) and isinstance(closer.directive, EndIfDirective)
+        (
+            isinstance(opener.directive, ForDirective)
+            and isinstance(closer.directive, EndForDirective)
+        )
+        or (
+            isinstance(opener.directive, IfDirective)
+            and isinstance(closer.directive, EndIfDirective)
+        )
+        or (
+            isinstance(opener.directive, RegionDirective)
+            and isinstance(closer.directive, EndRegionDirective)
+        )
     )
 
 
 def _can_pair(opener: _Marker, closer: _Marker) -> bool:
+    """Return whether two matching markers have valid corner ordering.
+
+    Args:
+        opener: Candidate top-left marker.
+        closer: Candidate bottom-right marker.
+
+    Returns:
+        ``True`` when kinds, coordinates, and same-cell token order are valid.
+    """
+
     if not _marker_kinds_match(opener, closer):
         return False
     start = opener.coordinate
@@ -104,6 +151,15 @@ def _can_pair(opener: _Marker, closer: _Marker) -> bool:
 
 
 def _compatible_rectangles(rectangles: list[Rectangle]) -> tuple[bool, bool]:
+    """Check whether rectangles form a nested-or-disjoint tree.
+
+    Args:
+        rectangles: Candidate source rectangles.
+
+    Returns:
+        ``(compatible, saw_partial_overlap)`` for the complete collection.
+    """
+
     for index, first in enumerate(rectangles):
         for second in rectangles[index + 1 :]:
             if first == second:
@@ -120,6 +176,16 @@ def _pair_markers(
     openers: list[_Marker],
     closers: list[_Marker],
 ) -> tuple[list[_Pair] | None, Diagnostic | None]:
+    """Find the unique globally compatible opener-to-closer pairing.
+
+    Args:
+        openers: Structural opening markers in worksheet order.
+        closers: Structural closing markers in worksheet order.
+
+    Returns:
+        Either the unique pair list and no diagnostic, or no list and one diagnostic.
+    """
+
     if len(openers) != len(closers):
         marker = (openers + closers)[0]
         return None, Diagnostic(
@@ -145,6 +211,14 @@ def _pair_markers(
     saw_partial_overlap = False
 
     def search(index: int, used: set[int], pairs: list[_Pair]) -> None:
+        """Enumerate compatible pairings with backtracking.
+
+        Args:
+            index: Index of the opener currently being paired.
+            used: Closing-marker indexes already allocated.
+            pairs: Mutable candidate pair stack for the current search branch.
+        """
+
         nonlocal saw_partial_overlap
         if index == len(openers):
             valid, partial = _compatible_rectangles([pair.rectangle for pair in pairs])
@@ -190,6 +264,16 @@ def _pair_markers(
 def _associate_else_markers(
     pairs: list[_Pair], else_markers: list[_Marker]
 ) -> tuple[list[_RegionSpec] | None, Diagnostic | None]:
+    """Attach each ``else`` marker to its nearest compatible ``if`` pair.
+
+    Args:
+        pairs: Unbranched structural marker pairs.
+        else_markers: Branch markers awaiting an owning conditional.
+
+    Returns:
+        Region specifications with branch markers, or one ownership diagnostic.
+    """
+
     assignments: dict[_Pair, list[_Marker]] = {pair: [] for pair in pairs}
     if_pairs = [pair for pair in pairs if isinstance(pair.opener.directive, IfDirective)]
     for marker in else_markers:
@@ -234,6 +318,17 @@ def _validate_marker_position(
     tokens: tuple[TextToken | OutputToken | DirectiveToken, ...],
     marker: _Marker,
 ) -> Diagnostic | None:
+    """Validate the token-boundary rule for a structural marker.
+
+    Args:
+        token_index: Marker position within the cell's token sequence.
+        tokens: Complete token sequence for the source cell.
+        marker: Parsed marker being validated.
+
+    Returns:
+        A positioning diagnostic, or ``None`` when valid.
+    """
+
     if marker.is_opener:
         valid = all(
             isinstance(token, TextToken) and not token.text.strip()
@@ -260,6 +355,16 @@ def _validate_marker_position(
 
 
 def _parent_of(spec: _RegionSpec, specs: list[_RegionSpec]) -> _RegionSpec | None:
+    """Return the smallest strict rectangle containing a specification.
+
+    Args:
+        spec: Child candidate whose parent is requested.
+        specs: All worksheet structural specifications.
+
+    Returns:
+        The nearest containing specification, or ``None`` at worksheet level.
+    """
+
     candidates = [
         possible
         for possible in specs
@@ -271,24 +376,58 @@ def _parent_of(spec: _RegionSpec, specs: list[_RegionSpec]) -> _RegionSpec | Non
 
 
 def _children_of(spec: _RegionSpec | None, specs: list[_RegionSpec]) -> list[_RegionSpec]:
+    """Return direct children of a specification or the worksheet root.
+
+    Args:
+        spec: Parent specification, or ``None`` for top-level nodes.
+        specs: All worksheet structural specifications.
+
+    Returns:
+        Specifications whose nearest parent is ``spec``.
+    """
+
     return [candidate for candidate in specs if _parent_of(candidate, specs) is spec]
 
 
-def _spec_shift(spec: _RegionSpec) -> str:
+def _spec_shift(spec: _RegionSpec, specs: list[_RegionSpec]) -> str:
+    """Resolve a specification's effective row or cell shift policy.
+
+    Args:
+        spec: Structural specification to resolve.
+        specs: All specifications used to locate inherited parents.
+
+    Returns:
+        ``"rows"`` or ``"cells"`` after applying conditional inheritance.
+    """
+
     directive = spec.pair.opener.directive
-    return directive.shift if isinstance(directive, ForDirective) else "rows"
+    if isinstance(directive, (ForDirective, RegionDirective)):
+        return directive.shift
+    parent = _parent_of(spec, specs)
+    return "rows" if parent is None else _spec_shift(parent, specs)
 
 
 def _validate_sibling_shift_lanes(
-    siblings: list[_RegionSpec], diagnostics: list[Diagnostic]
+    siblings: list[_RegionSpec], specs: list[_RegionSpec], diagnostics: list[Diagnostic]
 ) -> None:
+    """Report siblings that ambiguously claim overlapping worksheet rows.
+
+    Args:
+        siblings: Direct sibling specifications to compare.
+        specs: All specifications used to resolve inherited shift policies.
+        diagnostics: Mutable diagnostic accumulator.
+    """
+
     for index, first in enumerate(siblings):
         for second in siblings[index + 1 :]:
             rows_overlap = not (
                 first.rectangle.bottom < second.rectangle.top
                 or second.rectangle.bottom < first.rectangle.top
             )
-            if rows_overlap and "rows" in {_spec_shift(first), _spec_shift(second)}:
+            if rows_overlap and "rows" in {
+                _spec_shift(first, specs),
+                _spec_shift(second, specs),
+            }:
                 diagnostics.append(
                     Diagnostic(
                         DiagnosticCode.OVERLAPPING_ROW_SHIFTS,
@@ -303,6 +442,14 @@ def _validate_merged_ranges(
     specs: list[_RegionSpec],
     diagnostics: list[Diagnostic],
 ) -> None:
+    """Reject merges bisected by block rectangles or active cell-shift lanes.
+
+    Args:
+        template: Adapter-neutral worksheet containing merged ranges.
+        specs: All structural specifications on the worksheet.
+        diagnostics: Mutable diagnostic accumulator.
+    """
+
     for merged in template.merged_ranges:
         for spec in specs:
             region = spec.rectangle
@@ -321,7 +468,10 @@ def _validate_merged_ranges(
                 )
                 continue
 
-            if _spec_shift(spec) != "cells" or merged.bottom <= region.bottom:
+            if _spec_shift(spec, specs) != "cells" or merged.bottom <= region.bottom:
+                continue
+            parent = _parent_of(spec, specs)
+            if parent is not None and merged.top > parent.rectangle.bottom:
                 continue
             overlaps_lane = not (merged.right < region.left or merged.left > region.right)
             contained_in_lane = region.left <= merged.left and merged.right <= region.right
@@ -343,12 +493,29 @@ def _make_node(
     specs: list[_RegionSpec],
     diagnostics: list[Diagnostic],
     containing_shift: str,
-) -> RegionNode:
+) -> StructuralNode:
+    """Recursively convert one linked specification into a typed AST node.
+
+    Args:
+        spec: Linked source specification to compile.
+        specs: All specifications used to locate direct children.
+        diagnostics: Mutable semantic diagnostic accumulator.
+        containing_shift: Shift policy inherited by conditional nodes.
+
+    Returns:
+        A ``ForNode``, ``IfNode``, or explicit ``RegionNode``.
+
+    Raises:
+        TypeError: If the specification contains an unexpected opener type.
+    """
+
     child_specs = _children_of(spec, specs)
-    _validate_sibling_shift_lanes(child_specs, diagnostics)
+    _validate_sibling_shift_lanes(child_specs, specs, diagnostics)
     directive = spec.pair.opener.directive
     child_containing_shift = (
-        directive.shift if isinstance(directive, ForDirective) else containing_shift
+        directive.shift
+        if isinstance(directive, (ForDirective, RegionDirective))
+        else containing_shift
     )
     child_nodes = tuple(
         _make_node(child, specs, diagnostics, child_containing_shift)
@@ -360,6 +527,14 @@ def _make_node(
             child_nodes,
             directive.variable,
             directive.iterable,
+            directive.direction,
+            directive.shift,
+            spec.pair.opener.span,
+        )
+    if isinstance(directive, RegionDirective):
+        return RegionNode(
+            spec.rectangle,
+            child_nodes,
             directive.direction,
             directive.shift,
             spec.pair.opener.span,
@@ -415,6 +590,18 @@ def _compile_cell(
     value: Any,
     diagnostics: list[Diagnostic],
 ) -> tuple[CellNode, list[_Marker]]:
+    """Compile one raw cell into output parts and structural markers.
+
+    Args:
+        template: Owning worksheet template.
+        coordinate: Source coordinate of the cell.
+        value: Raw cell value.
+        diagnostics: Mutable lexical and syntax diagnostic accumulator.
+
+    Returns:
+        The compiled cell node and any markers found in the cell.
+    """
+
     if not isinstance(value, str):
         return CellNode(coordinate, (LiteralPart(value),)), []
     lexed = lex_cell(template.name, coordinate.a1, value)
@@ -464,7 +651,14 @@ def _compile_cell(
 
 
 def compile_sheet(template: WorksheetTemplate) -> CompilationResult:
-    """Lex, parse, spatially link, validate, and return an immutable worksheet AST."""
+    """Lex, parse, spatially link, and validate a worksheet template.
+
+    Args:
+        template: Adapter-neutral source worksheet.
+
+    Returns:
+        A compiled immutable worksheet AST or structured diagnostics.
+    """
 
     diagnostics: list[Diagnostic] = []
     cells: dict[Coordinate, CellNode] = {}
@@ -489,7 +683,7 @@ def compile_sheet(template: WorksheetTemplate) -> CompilationResult:
     assert specs is not None
 
     top_level_specs = _children_of(None, specs)
-    _validate_sibling_shift_lanes(top_level_specs, diagnostics)
+    _validate_sibling_shift_lanes(top_level_specs, specs, diagnostics)
     _validate_merged_ranges(template, specs, diagnostics)
     children = tuple(
         _make_node(spec, specs, diagnostics, "rows")

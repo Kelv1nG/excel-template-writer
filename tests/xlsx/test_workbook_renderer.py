@@ -275,6 +275,50 @@ def test_repeats_blank_cells_that_carry_formatting(tmp_path: Path) -> None:
         rendered.close()
 
 
+def test_cell_shift_region_moves_its_full_formatted_band_and_keeps_adjacent_cells(
+    tmp_path: Path,
+) -> None:
+    template_path = tmp_path / "region-template.xlsx"
+    output_path = tmp_path / "region-output.xlsx"
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Region"
+    sheet["A1"] = '{% region shift="cells" %}'
+    sheet["D2"] = '{% for item in items shift="cells" %}{{ item }}'
+    sheet["F2"] = "{% endfor %}"
+    sheet["J2"] = "{% endregion %}"
+    sheet["A10"] = "Moves with A:J"
+    sheet["A10"].fill = PatternFill("solid", fgColor="FFBDD7EE")
+    sheet["J10"].fill = PatternFill("solid", fgColor="FFBDD7EE")
+    sheet["K10"] = "Stays in K:P"
+    sheet["K10"].fill = PatternFill("solid", fgColor="FFFFE699")
+    sheet["D2"].font = Font(bold=True, color="FF17365D")
+    _save(workbook, template_path)
+
+    render_workbook(template_path, output_path, {"items": ["One", "Two", "Three", "Four", "Five"]})
+
+    rendered = load_workbook(output_path)
+    try:
+        sheet = rendered["Region"]
+        assert [sheet[f"D{row}"].value for row in range(2, 7)] == [
+            "One",
+            "Two",
+            "Three",
+            "Four",
+            "Five",
+        ]
+        assert all(sheet[f"D{row}"].font.bold for row in range(2, 7))
+        assert sheet["A14"].value == "Moves with A:J"
+        assert sheet["A14"].fill.fgColor.rgb == "FFBDD7EE"
+        assert sheet["J14"].value is None
+        assert sheet["J14"].fill.fgColor.rgb == "FFBDD7EE"
+        assert sheet["K10"].value == "Stays in K:P"
+        assert sheet["K10"].fill.fgColor.rgb == "FFFFE699"
+        assert sheet["A10"].value is None
+    finally:
+        rendered.close()
+
+
 @pytest.mark.parametrize("feature", ["formula", "conditional-formatting"])
 def test_rejects_affected_unsupported_features(tmp_path: Path, feature: str) -> None:
     template_path = tmp_path / f"{feature}.xlsx"

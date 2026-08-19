@@ -21,6 +21,8 @@ isolate the current presentation and layout contracts:
 5. differently styled conditional branches that compact after selection;
 6. native date, number, boolean, and string values with template-owned formats;
 7. nested repeats whose row styles and heights follow measured group sizes.
+8. an explicit `shift="cells"` region that measures three lanes together, moves its complete
+   formatted `A:J` band, and leaves the adjacent `K:P` section fixed.
 
 The intentionally blank gold cells make blank-cell style copying easy to see. Gold footer bands
 show where content below a block lands after expansion or compaction.

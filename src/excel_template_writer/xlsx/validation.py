@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 
-from excel_template_writer.ast import CompiledSheet, ForNode, RegionNode
+from excel_template_writer.ast import CompiledSheet, ForNode, StructuralNode
 from excel_template_writer.diagnostics import Diagnostic, DiagnosticCode, SourceLocation
 from excel_template_writer.model import Coordinate
 from excel_template_writer.render import RenderPlan
@@ -12,6 +12,16 @@ from excel_template_writer.xlsx.model import SheetSnapshot
 
 
 def _location(sheet: SheetSnapshot, coordinate: Coordinate | None = None) -> SourceLocation:
+    """Create a worksheet diagnostic location with an optional coordinate.
+
+    Args:
+        sheet: Owning worksheet snapshot.
+        coordinate: Affected coordinate, or ``None`` for worksheet-level ``A1``.
+
+    Returns:
+        Source location using the worksheet's name.
+    """
+
     return SourceLocation(
         sheet.template.name,
         "A1" if coordinate is None else coordinate.a1,
@@ -19,6 +29,15 @@ def _location(sheet: SheetSnapshot, coordinate: Coordinate | None = None) -> Sou
 
 
 def _destinations_by_source(plan: RenderPlan) -> dict[Coordinate, list[Coordinate]]:
+    """Group planned destination cells by their source coordinate.
+
+    Args:
+        plan: Completed worksheet render plan.
+
+    Returns:
+        Source coordinates mapped to every planned destination copy.
+    """
+
     destinations: dict[Coordinate, list[Coordinate]] = defaultdict(list)
     for cell in plan.cells:
         destinations[cell.source_coordinate].append(cell.coordinate)
@@ -26,11 +45,21 @@ def _destinations_by_source(plan: RenderPlan) -> dict[Coordinate, list[Coordinat
 
 
 def _walk(
-    nodes: tuple[RegionNode, ...],
+    nodes: tuple[StructuralNode, ...],
     *,
     loop_depth: int = 0,
-) -> list[tuple[RegionNode, int]]:
-    walked: list[tuple[RegionNode, int]] = []
+) -> list[tuple[StructuralNode, int]]:
+    """Walk structural nodes while tracking nested repeat depth.
+
+    Args:
+        nodes: Sibling nodes to traverse recursively.
+        loop_depth: Number of containing repeat nodes.
+
+    Returns:
+        Nodes in preorder paired with their containing repeat depth.
+    """
+
+    walked: list[tuple[StructuralNode, int]] = []
     for node in nodes:
         walked.append((node, loop_depth))
         child_depth = loop_depth + 1 if isinstance(node, ForNode) else loop_depth
@@ -43,6 +72,17 @@ def validate_sheet_features(
     compiled: CompiledSheet,
     plan: RenderPlan,
 ) -> tuple[Diagnostic, ...]:
+    """Validate workbook features against the compiled AST and final plan.
+
+    Args:
+        sheet: Detached worksheet feature and presentation snapshot.
+        compiled: Compiled worksheet AST.
+        plan: Completed render plan.
+
+    Returns:
+        Diagnostics for unsupported coordinate transforms or row-height behavior.
+    """
+
     diagnostics: list[Diagnostic] = []
     has_layout = bool(compiled.children)
     destinations = _destinations_by_source(plan)

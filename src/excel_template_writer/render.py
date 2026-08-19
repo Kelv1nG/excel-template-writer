@@ -14,6 +14,7 @@ from excel_template_writer.ast import (
     IfNode,
     LiteralPart,
     RegionNode,
+    StructuralNode,
 )
 from excel_template_writer.diagnostics import (
     Diagnostic,
@@ -80,6 +81,15 @@ class RenderResult:
     diagnostics: tuple[Diagnostic, ...]
 
     def require(self) -> RenderPlan:
+        """Return the render plan or raise its diagnostics.
+
+        Returns:
+            The successfully completed render plan.
+
+        Raises:
+            TemplateRenderError: If rendering produced no plan.
+        """
+
         if self.plan is None:
             raise TemplateRenderError(self.diagnostics)
         return self.plan
@@ -99,12 +109,25 @@ _EVALUATION_FAILED = object()
 
 class _ResourceLimitExceeded(Exception):
     def __init__(self, diagnostic: Diagnostic) -> None:
+        """Create a fail-fast signal for one deterministic resource violation.
+
+        Args:
+            diagnostic: Limit diagnostic to return from the public render boundary.
+        """
+
         self.diagnostic = diagnostic
         super().__init__(str(diagnostic))
 
 
 class _Renderer:
     def __init__(self, compiled: CompiledSheet, limits: ResourceLimits) -> None:
+        """Initialize one pure worksheet render operation.
+
+        Args:
+            compiled: Immutable worksheet AST to render.
+            limits: Resource ceilings for planning this worksheet.
+        """
+
         self.compiled = compiled
         self.limits = limits
         self.diagnostics: list[Diagnostic] = []
@@ -116,6 +139,14 @@ class _Renderer:
         message: str,
         location: SourceLocation,
     ) -> None:
+        """Append a recoverable render diagnostic.
+
+        Args:
+            code: Stable diagnostic code.
+            message: Human-readable failure description.
+            location: Worksheet source location responsible for the failure.
+        """
+
         self.diagnostics.append(Diagnostic(code, message, location))
 
     def resource_limit(
@@ -124,6 +155,17 @@ class _Renderer:
         message: str,
         location: SourceLocation,
     ) -> None:
+        """Stop planning immediately with a resource-limit diagnostic.
+
+        Args:
+            code: Stable resource-limit diagnostic code.
+            message: Human-readable limit description.
+            location: Source location active when the limit was exceeded.
+
+        Raises:
+            _ResourceLimitExceeded: Always, carrying the constructed diagnostic.
+        """
+
         raise _ResourceLimitExceeded(Diagnostic(code, message, location))
 
     def check_block_limits(
@@ -134,6 +176,18 @@ class _Renderer:
         location: SourceLocation,
         width: int,
     ) -> None:
+        """Validate measured block size against configured and XLSX ceilings.
+
+        Args:
+            cells: Number of planned material cells in the block.
+            height: Completed block height in rows.
+            location: Source location used for any diagnostic.
+            width: Completed block width in columns.
+
+        Raises:
+            _ResourceLimitExceeded: If any configured or absolute limit is exceeded.
+        """
+
         if cells > self.limits.max_planned_cells_per_sheet:
             self.resource_limit(
                 DiagnosticCode.RENDER_RESOURCE_LIMIT_EXCEEDED,
@@ -175,6 +229,18 @@ class _Renderer:
         missing_roots: frozenset[str],
         path: tuple[int, ...],
     ) -> PlannedCell | None:
+        """Evaluate one compiled cell in the current lexical scope.
+
+        Args:
+            cell: Compiled source cell.
+            scope: Current canonical variable mapping.
+            missing_roots: Loop roots intentionally absent for an empty placeholder.
+            path: Nested repeat instance indexes for provenance.
+
+        Returns:
+            A planned cell, or ``None`` when the source cell has no output parts.
+        """
+
         if not cell.parts:
             return None
         values: list[Any] = []
@@ -228,6 +294,16 @@ class _Renderer:
         node: ForNode | IfNode,
         scope: Mapping[str, Any],
     ) -> Any:
+        """Evaluate the controlling expression of a repeat or condition.
+
+        Args:
+            node: Repeat or conditional AST node.
+            scope: Current canonical lexical scope.
+
+        Returns:
+            The expression value, or an internal failure sentinel after diagnostics.
+        """
+
         expression = node.iterable if isinstance(node, ForNode) else node.condition
         try:
             return evaluate_expression(expression, scope)
@@ -248,6 +324,23 @@ class _Renderer:
         top: int,
         location: SourceLocation,
     ) -> dict[Coordinate, PlannedCell]:
+        """Move planned cells below a replaced child allocation.
+
+        Args:
+            grid: Current local destination grid.
+            bottom: Original local bottom row of the child.
+            left: Local left edge of the child lane.
+            right: Local right edge of the child lane.
+            delta: Signed change in child height.
+            shift: ``"rows"`` for global movement or ``"cells"`` for lane movement.
+            replacement_height: Completed child height used to remove contracted rows.
+            top: Original local top row of the child.
+            location: Source location used for collision diagnostics.
+
+        Returns:
+            A new destination grid with affected cells translated.
+        """
+
         shifted: dict[Coordinate, PlannedCell] = {}
         eliminated_start = top + replacement_height
         for coordinate, cell in grid.items():
@@ -276,6 +369,19 @@ class _Renderer:
         delta: int,
         shift: str,
     ) -> dict[int, PlannedRow]:
+        """Translate worksheet-wide row presentation for a row-shift child.
+
+        Args:
+            rows: Current local row provenance mapping.
+            top: Original local top row of the child.
+            bottom: Original local bottom row of the child.
+            delta: Signed change in child height.
+            shift: Child shift policy.
+
+        Returns:
+            Updated row provenance; unchanged for cell-shift children.
+        """
+
         if shift != "rows":
             return rows
         shifted: dict[int, PlannedRow] = {}
@@ -296,6 +402,20 @@ class _Renderer:
         delta: int,
         shift: str,
     ) -> list[PlannedMerge]:
+        """Translate merges wholly affected by a child height change.
+
+        Args:
+            merges: Current local merged-range plans.
+            bottom: Original local bottom row of the child.
+            left: Local left edge of the child lane.
+            right: Local right edge of the child lane.
+            delta: Signed change in child height.
+            shift: Child shift policy.
+
+        Returns:
+            Merged-range plans with affected rectangles translated.
+        """
+
         shifted: list[PlannedMerge] = []
         for merge in merges:
             in_lane = shift == "rows" or (
@@ -316,6 +436,16 @@ class _Renderer:
         left: int,
         location: SourceLocation,
     ) -> None:
+        """Place a completed child grid into its parent allocation.
+
+        Args:
+            grid: Mutable parent destination grid.
+            child: Completed child block in local coordinates.
+            top: Parent-local destination top row.
+            left: Parent-local destination left column.
+            location: Source location used for collision diagnostics.
+        """
+
         for coordinate, cell in child.cells.items():
             destination = Coordinate(top + coordinate.row - 1, left + coordinate.column - 1)
             if destination in grid:
@@ -335,6 +465,15 @@ class _Renderer:
         top: int,
         shift: str,
     ) -> None:
+        """Place child row provenance when it owns complete worksheet rows.
+
+        Args:
+            rows: Mutable parent row-provenance mapping.
+            child: Completed child block.
+            top: Parent-local destination top row.
+            shift: Child shift policy.
+        """
+
         if shift != "rows":
             return
         for destination_row, row in child.rows.items():
@@ -349,6 +488,15 @@ class _Renderer:
         top: int,
         left: int,
     ) -> None:
+        """Place completed child merges and report any overlap.
+
+        Args:
+            merges: Mutable parent merged-range plans.
+            child: Completed child block.
+            top: Parent-local destination top row.
+            left: Parent-local destination left column.
+        """
+
         for merge in child.merges:
             rectangle = merge.rectangle.translated(rows=top - 1, columns=left - 1)
             if any(rectangle.intersects(existing.rectangle) for existing in merges):
@@ -366,11 +514,24 @@ class _Renderer:
     def render_area(
         self,
         rectangle: Rectangle,
-        children: tuple[RegionNode, ...],
+        children: tuple[StructuralNode, ...],
         scope: Mapping[str, Any],
         missing_roots: frozenset[str],
         path: tuple[int, ...],
     ) -> _Block:
+        """Measure and render one source rectangle in local coordinates.
+
+        Args:
+            rectangle: Exact source rectangle being rendered.
+            children: Direct structural children owned by the rectangle.
+            scope: Current canonical lexical scope.
+            missing_roots: Loop roots intentionally absent for empty placeholders.
+            path: Nested repeat instance indexes for provenance.
+
+        Returns:
+            A completed local block containing cells, rows, merges, and measured size.
+        """
+
         self.check_block_limits(
             cells=0,
             height=rectangle.height,
@@ -487,11 +648,29 @@ class _Renderer:
 
     def render_region(
         self,
-        node: RegionNode,
+        node: StructuralNode,
         scope: Mapping[str, Any],
         missing_roots: frozenset[str],
         path: tuple[int, ...],
     ) -> _Block:
+        """Render one structural AST node into a completed local block.
+
+        Args:
+            node: Explicit region, repeat, or conditional node.
+            scope: Current canonical lexical scope.
+            missing_roots: Loop roots intentionally absent for empty placeholders.
+            path: Nested repeat instance indexes for provenance.
+
+        Returns:
+            The measured and evaluated child block.
+
+        Raises:
+            TypeError: If an unsupported structural node reaches the renderer.
+        """
+
+        if isinstance(node, RegionNode):
+            return self.render_area(node.rectangle, node.children, scope, missing_roots, path)
+
         if isinstance(node, ForNode):
             raw_items = self.evaluate_region_expression(node, scope)
             if raw_items is _EVALUATION_FAILED:
@@ -587,7 +766,17 @@ def render_sheet(
     adapters: Iterable[TypeAdapter[Any]] = (),
     limits: ResourceLimits = DEFAULT_RESOURCE_LIMITS,
 ) -> RenderResult:
-    """Evaluate a compiled sheet into an adapter-neutral destination-cell plan."""
+    """Evaluate a compiled sheet into an adapter-neutral render plan.
+
+    Args:
+        compiled: Immutable compiled worksheet AST.
+        context: Raw or already-normalized render context.
+        adapters: Explicit runtime-type adapters used during normalization.
+        limits: Resource ceilings for normalization and planning.
+
+    Returns:
+        A complete render plan or structured diagnostics; never a partial plan.
+    """
 
     normalization = normalize_context(context, adapters=adapters, limits=limits)
     if normalization.context is None:

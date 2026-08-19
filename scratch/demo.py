@@ -89,6 +89,7 @@ DEMO_CONTEXT: dict[str, Any] = {
     ],
     "empty_items": [],
     "left_items": ["Left A", "Left B", "Left C"],
+    "middle_items": ["Middle 1", "Middle 2", "Middle 3", "Middle 4", "Middle 5"],
     "right_items": ["Right 1", "Right 2"],
     "account": {"active": True, "overdue": False},
     "groups": [
@@ -273,6 +274,14 @@ def _build_start_here(workbook: WorkbookType) -> None:
             "2 group headers",
             "5 item rows",
             "nested heights",
+            "visually inspect",
+        ),
+        (
+            8,
+            "Region Isolation",
+            "3 measured lanes",
+            "blue band moves",
+            "gold band stays",
             "visually inspect",
         ),
     )
@@ -552,6 +561,78 @@ def _build_nested_groups(workbook: WorkbookType) -> None:
     sheet.row_dimensions[8].height = 27
 
 
+def _build_region_isolation(workbook: WorkbookType) -> None:
+    sheet = workbook.create_sheet("8 Region Isolation")
+    sheet.sheet_view.showGridLines = False
+    sheet.freeze_panes = "A5"
+    for column in range(1, 17):
+        sheet.column_dimensions[get_column_letter(column)].width = 13
+
+    _merge_band(
+        sheet,
+        "A1:P1",
+        "Explicit region isolation",
+        fill=NAVY,
+        font_color=WHITE,
+        bold=True,
+        size=18,
+        horizontal="center",
+    )
+    _merge_band(
+        sheet,
+        "A2:P2",
+        'A:J is one shift="cells" region. Its three lanes are measured together; K:P is outside '
+        "the boundary and must stay fixed.",
+        fill=PALE_BLUE,
+        size=10,
+        horizontal="center",
+    )
+    sheet.row_dimensions[1].height = 32
+    sheet.row_dimensions[2].height = 38
+
+    for cell_range, label, fill in (
+        ("A4:C4", "LEFT — 3 items", LIGHT_BLUE),
+        ("D4:F4", "MIDDLE — 5 items", LIGHT_GREEN),
+        ("G4:I4", "RIGHT — 2 items", LIGHT_BLUE),
+        ("K4:P4", "OUTSIDE REGION", LIGHT_GOLD),
+    ):
+        _merge_band(sheet, cell_range, label, fill=fill, bold=True, horizontal="center")
+
+    sheet["A5"] = '{% region shift="cells" %}A:J REGION BOUNDARY'
+    sheet["J5"] = None
+    _paint(sheet, "A5:J5", fill=NAVY, font_color=WHITE, bold=True, horizontal="center")
+
+    sheet["A6"] = '{% for item in left_items shift="cells" %}{{ item }}'
+    sheet["C6"] = "LEFT{% endfor %}"
+    sheet["D6"] = '{% for item in middle_items shift="cells" %}{{ item }}'
+    sheet["F6"] = "MIDDLE{% endfor %}"
+    sheet["G6"] = '{% for item in right_items shift="cells" %}{{ item }}'
+    sheet["I6"] = "RIGHT{% endfor %}"
+    sheet["J6"] = "{% endregion %}"
+    _paint(sheet, "A6:C6", fill=LIGHT_BLUE, bold=True)
+    _paint(sheet, "D6:F6", fill=LIGHT_GREEN, bold=True)
+    _paint(sheet, "G6:J6", fill=PALE_BLUE, bold=True)
+    # Cell-shift children cannot own a worksheet-wide custom row height.
+    sheet.row_dimensions[6].height = None
+
+    _merge_band(
+        sheet,
+        "A10:J10",
+        "BLUE BAND — inside A:J, expected at row 14 after tallest lane adds four rows",
+        fill=LIGHT_BLUE,
+        bold=True,
+        horizontal="center",
+    )
+    _merge_band(
+        sheet,
+        "K10:P10",
+        "GOLD BAND — outside A:J, stays on row 10",
+        fill=LIGHT_GOLD,
+        bold=True,
+        horizontal="center",
+    )
+
+
 def build_demo_template(path: Path = TEMPLATE_PATH) -> Path:
     """Create the authored workbook containing visible tags and source formatting."""
 
@@ -568,6 +649,7 @@ def build_demo_template(path: Path = TEMPLATE_PATH) -> Path:
     _build_conditions(workbook)
     _build_scalars(workbook)
     _build_nested_groups(workbook)
+    _build_region_isolation(workbook)
     workbook.active = 0
     _atomic_save(workbook, path)
     return path
@@ -689,6 +771,26 @@ def _validate_output(template_path: Path, output_path: Path) -> None:
         )
         assert nested.row_dimensions[5].height == 28
         assert nested.row_dimensions[9].height == 28
+
+        region = output["8 Region Isolation"]
+        assert [region.cell(row, 1).value for row in range(6, 9)] == [
+            "Left A",
+            "Left B",
+            "Left C",
+        ]
+        assert [region.cell(row, 4).value for row in range(6, 11)] == [
+            "Middle 1",
+            "Middle 2",
+            "Middle 3",
+            "Middle 4",
+            "Middle 5",
+        ]
+        assert [region.cell(row, 7).value for row in range(6, 8)] == ["Right 1", "Right 2"]
+        assert region["A14"].value.startswith("BLUE BAND")
+        assert region["A14"].fill.fgColor.rgb == LIGHT_BLUE
+        assert region["K10"].value.startswith("GOLD BAND")
+        assert region["K10"].fill.fgColor.rgb == LIGHT_GOLD
+        assert {"A14:J14", "K10:P10"}.issubset({str(item) for item in region.merged_cells.ranges})
     finally:
         template.close()
         output.close()

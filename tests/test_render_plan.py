@@ -92,6 +92,119 @@ def test_cell_shift_grows_only_the_repeated_lane() -> None:
     }
 
 
+def test_cell_shift_region_uses_tallest_side_by_side_lane_and_exact_column_band() -> None:
+    template = WorksheetTemplate.from_cells(
+        "Report",
+        {
+            "A1": '{% region shift="cells" %}',
+            "A2": '{% for item in left shift="cells" %}{{ item }}',
+            "C2": "{% endfor %}",
+            "D2": '{% for item in middle shift="cells" %}{{ item }}',
+            "F2": "{% endfor %}",
+            "G2": '{% for item in right shift="cells" %}{{ item }}',
+            "I2": "{% endfor %}",
+            "J2": "{% endregion %}",
+            "A10": "Moves with region band",
+            "K10": "Stays outside region band",
+        },
+    )
+    compiled = compile_sheet(template).require()
+
+    plan = render_sheet(
+        compiled,
+        {
+            "left": ["L1", "L2", "L3"],
+            "middle": ["M1", "M2", "M3", "M4", "M5"],
+            "right": ["R1", "R2"],
+        },
+    ).require()
+
+    values = _values_by_coordinate(plan)
+    assert {coordinate: values[coordinate] for coordinate in ("A2", "A3", "A4")} == {
+        "A2": "L1",
+        "A3": "L2",
+        "A4": "L3",
+    }
+    assert {coordinate: values[coordinate] for coordinate in ("D2", "D3", "D4", "D5", "D6")} == {
+        "D2": "M1",
+        "D3": "M2",
+        "D4": "M3",
+        "D5": "M4",
+        "D6": "M5",
+    }
+    assert values["A14"] == "Moves with region band"
+    assert values["K10"] == "Stays outside region band"
+    assert "A10" not in values
+    assert plan.height == 14
+
+
+def test_row_shift_region_moves_complete_rows_by_tallest_child_growth() -> None:
+    template = WorksheetTemplate.from_cells(
+        "Report",
+        {
+            "A1": "{% region %}",
+            "A2": '{% for item in left shift="cells" %}{{ item }}{% endfor %}',
+            "D2": '{% for item in right shift="cells" %}{{ item }}{% endfor %}',
+            "J2": "{% endregion %}",
+            "A10": "Left footer",
+            "K10": "Right footer",
+        },
+    )
+    compiled = compile_sheet(template).require()
+
+    plan = render_sheet(
+        compiled,
+        {"left": ["L1", "L2", "L3"], "right": ["R1", "R2", "R3", "R4", "R5"]},
+    ).require()
+
+    values = _values_by_coordinate(plan)
+    assert values["A14"] == "Left footer"
+    assert values["K14"] == "Right footer"
+    assert "K10" not in values
+
+
+def test_region_reserved_height_absorbs_child_growth_before_external_shift() -> None:
+    template = WorksheetTemplate.from_cells(
+        "Report",
+        {
+            "A1": '{% region shift="cells" %}',
+            "A2": '{% for item in items shift="cells" %}{{ item }}{% endfor %}',
+            "J10": "{% endregion %}",
+            "A20": "Footer",
+        },
+    )
+    compiled = compile_sheet(template).require()
+
+    plan = render_sheet(compiled, {"items": [1, 2, 3, 4, 5]}).require()
+
+    values = _values_by_coordinate(plan)
+    assert values["A20"] == "Footer"
+    assert "A24" not in values
+
+
+def test_nested_regions_are_measured_from_the_inside_out() -> None:
+    template = WorksheetTemplate.from_cells(
+        "Report",
+        {
+            "A1": '{% region shift="cells" %}',
+            "A2": '{% region shift="cells" %}',
+            "A3": '{% for item in items shift="cells" %}{{ item }}{% endfor %}',
+            "F3": "{% endregion %}",
+            "J3": "{% endregion %}",
+            "A10": "Outer footer",
+            "K10": "Adjacent footer",
+        },
+    )
+    compiled = compile_sheet(template).require()
+
+    plan = render_sheet(compiled, {"items": [1, 2, 3, 4, 5]}).require()
+
+    values = _values_by_coordinate(plan)
+    assert [values[f"A{row}"] for row in range(3, 8)] == [1, 2, 3, 4, 5]
+    assert values["A14"] == "Outer footer"
+    assert values["K10"] == "Adjacent footer"
+
+
 def test_condition_selects_and_compacts_the_matching_branch() -> None:
     template = WorksheetTemplate.from_rows(
         "Report",

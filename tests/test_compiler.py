@@ -1,7 +1,9 @@
-from excel_template_writer.ast import ForNode, IfNode
+import pytest
+
+from excel_template_writer.ast import ForNode, IfNode, RegionNode
 from excel_template_writer.compiler import compile_sheet
 from excel_template_writer.diagnostics import DiagnosticCode
-from excel_template_writer.model import Rectangle, WorksheetTemplate
+from excel_template_writer.model import Coordinate, Rectangle, WorksheetTemplate
 
 
 def test_links_opposite_corners_into_a_rectangular_for_node() -> None:
@@ -40,6 +42,117 @@ def test_links_stacked_equal_width_if_else_branches() -> None:
     assert node.rectangle == Rectangle(1, 1, 2, 2)
     assert node.true_rectangle == Rectangle(1, 1, 1, 2)
     assert node.false_rectangle == Rectangle(2, 1, 2, 2)
+
+
+def test_links_explicit_region_and_its_nested_blocks() -> None:
+    template = WorksheetTemplate.from_cells(
+        "Report",
+        {
+            "A1": '{% region direction="down" shift="cells" %}',
+            "A2": '{% for item in items shift="cells" %}{{ item }}',
+            "C2": "{% endfor %}",
+            "J2": "{% endregion %}",
+        },
+    )
+
+    compiled = compile_sheet(template).require()
+
+    assert len(compiled.children) == 1
+    region = compiled.children[0]
+    assert isinstance(region, RegionNode)
+    assert region.rectangle == Rectangle(1, 1, 2, 10)
+    assert region.direction == "down"
+    assert region.shift == "cells"
+    assert len(region.children) == 1
+    assert isinstance(region.children[0], ForNode)
+    assert region.children[0].rectangle == Rectangle(2, 1, 2, 3)
+
+
+def test_region_defaults_to_downward_row_shifting() -> None:
+    template = WorksheetTemplate.from_cells(
+        "Report",
+        {"A1": "{% region %}", "B2": "{% endregion %}"},
+    )
+
+    region = compile_sheet(template).require().children[0]
+
+    assert isinstance(region, RegionNode)
+    assert region.direction == "down"
+    assert region.shift == "rows"
+
+
+def test_rejects_unsupported_region_direction() -> None:
+    template = WorksheetTemplate.from_cells(
+        "Report",
+        {"A1": '{% region direction="right" %}', "B2": "{% endregion %}"},
+    )
+
+    result = compile_sheet(template)
+
+    assert result.compiled is None
+    assert [diagnostic.code for diagnostic in result.diagnostics] == [
+        DiagnosticCode.INVALID_DIRECTIVE
+    ]
+    assert 'direction must be "down"' in result.diagnostics[0].message
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        'direction="down" direction="down"',
+        'shift="columns"',
+        'unknown="value"',
+    ],
+)
+def test_rejects_invalid_region_options(options: str) -> None:
+    template = WorksheetTemplate.from_cells(
+        "Report",
+        {"A1": f"{{% region {options} %}}", "B2": "{% endregion %}"},
+    )
+
+    result = compile_sheet(template)
+
+    assert result.compiled is None
+    assert [diagnostic.code for diagnostic in result.diagnostics] == [
+        DiagnosticCode.INVALID_DIRECTIVE
+    ]
+
+
+def test_rejects_merge_crossing_a_cell_shift_region_lane() -> None:
+    template = WorksheetTemplate(
+        "Report",
+        {
+            Coordinate(1, 1): '{% region shift="cells" %}',
+            Coordinate(2, 10): "{% endregion %}",
+            Coordinate(10, 10): "Crossing merge",
+        },
+        (Rectangle(10, 10, 10, 11),),
+    )
+
+    result = compile_sheet(template)
+
+    assert result.compiled is None
+    assert DiagnosticCode.MERGE_CROSSES_BLOCK_BOUNDARY in {
+        diagnostic.code for diagnostic in result.diagnostics
+    }
+
+
+def test_nested_cell_shift_lane_does_not_claim_merges_below_its_region() -> None:
+    template = WorksheetTemplate(
+        "Report",
+        {
+            Coordinate(1, 1): '{% region shift="cells" %}',
+            Coordinate(2, 1): '{% for item in items shift="cells" %}{{ item }}',
+            Coordinate(2, 3): "{% endfor %}",
+            Coordinate(2, 10): "{% endregion %}",
+            Coordinate(10, 1): "Region footer",
+        },
+        (Rectangle(10, 1, 10, 10),),
+    )
+
+    compiled = compile_sheet(template).require()
+
+    assert isinstance(compiled.children[0], RegionNode)
 
 
 def test_rejects_partially_overlapping_regions() -> None:
