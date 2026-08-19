@@ -44,3 +44,17 @@ object. It also demonstrates an intentionally lowered `ResourceLimits` ceiling a
 path-aware diagnostics produced for an unordered set, a non-finite number, and that same object
 when no adapter is supplied. The example intentionally uses no `TypedValue` wrapper: runtime value
 categories control permitted operations, while the template controls layout.
+
+## Polars adapter example
+
+Run the optional Polars example with:
+
+```powershell
+uv run --extra polars python scratch/polars_example.py
+```
+
+It creates `polars_template.xlsx` and `polars_output.xlsx` in `scratch/`. The template contains a
+styled rectangular repeat, while the input rows come directly from an eager `polars.DataFrame`.
+The script prints the immutable canonical records, renders through the production XLSX entrypoint,
+and verifies row order, native numeric/temporal values, and NaN-to-blank conversion after save/reload.
+The generated workbooks are disposable and are not source fixtures.

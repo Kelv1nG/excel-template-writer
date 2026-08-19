@@ -85,9 +85,18 @@ rejects duplicate or unrelated matches rather than depending on registration ord
 output is recursively normalized, and exceptions, invalid output, and conversion cycles retain the
 original context path.
 
-This foundation has no dependency on a particular data library. Future bundled pandas, Polars,
-Arrow, or DuckDB adapters will construct `TypeAdapter` values that produce the same canonical tree;
-they will not add layout decisions to the renderer.
+The optional [`adapters/polars.py`](../src/excel_template_writer/adapters/polars.py) integration
+constructs one of these same `TypeAdapter` values for eager `polars.DataFrame` objects. It produces
+an ordered list of row records, recursively turns float NaN values into canonical nulls, and then
+hands the result back to the ordinary normalizer. It neither creates a table-layout AST node nor
+matches headers to template cells. `LazyFrame` collection, sorting, grouping, and query execution
+remain explicit preprocessing operations owned by the caller.
+
+Polars is not imported by `excel_template_writer` or by `excel_template_writer.adapters`; only an
+explicit import of `excel_template_writer.adapters.polars` loads the optional dependency. The
+adapter preflights temporal dtypes and rejects nanosecond `Datetime`, `Time`, and timezone-bearing
+`Datetime` columns before Python materialization could lose information. Future pandas, Arrow, or
+DuckDB integrations should follow this boundary and produce the same canonical tree.
 
 ### Resource-limit policy
 
@@ -390,7 +399,8 @@ It does not yet provide:
 - formula translation; unaffected formulas are preserved and affected formulas are rejected;
 - loop metadata such as `loop.index`;
 - an `{% empty %}` repeat branch;
-- bundled pandas, Polars, Arrow, DuckDB, ORM, or other library-specific adapters;
+- bundled pandas, Arrow, DuckDB, ORM, or other library-specific adapters beyond the current eager
+  Polars `DataFrame` integration;
 - transformation of conditional formatting, data validation, native Excel Tables, drawings,
   hyperlinks, or comments when their coordinates would change.
 

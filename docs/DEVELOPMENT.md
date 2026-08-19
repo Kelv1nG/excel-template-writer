@@ -18,8 +18,10 @@ Manage packages with:
 ```powershell
 uv python install 3.12
 uv sync
+uv sync --all-groups --all-extras
 uv add <package>
 uv add --dev <development-package>
+uv add --optional <extra> <package>
 uv remove <package>
 uv run <command>
 ```
@@ -35,11 +37,14 @@ The selected quality tools are:
 Run the complete local gate with:
 
 ```powershell
-uv run pytest
-uv run ruff check src tests
-uv run ruff format --check src tests
-uv run ty check
+uv run --all-extras pytest
+uv run --all-extras ruff check src tests
+uv run --all-extras ruff format --check src tests
+uv run --all-extras ty check
 ```
+
+The base environment may omit optional integrations; their test modules skip when the corresponding
+extra is unavailable. The complete gate above installs and tests every supported integration.
 
 ## Before changing the project
 

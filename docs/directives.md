@@ -112,12 +112,30 @@ non-finite numbers, timezone-aware temporal values, cycles, arbitrary objects, a
 DataFrames are rejected. Diagnostics name the input path, for example
 `context.lines[2].amount`.
 
-Pandas, Polars, Arrow, DuckDB, ORM, and similar objects belong behind caller-supplied
-`TypeAdapter` instances. An adapter converts one declared runtime type into ordinary string-keyed
-records and ordered collections; its output is normalized recursively. Adapters cannot override
-canonical values, and ambiguous, duplicate, failing, or cyclic conversions are explicit errors.
-The core supplies this adapter mechanism but does not yet bundle integrations for particular data
-libraries.
+Pandas, Polars, Arrow, DuckDB, ORM, and similar objects belong behind explicit `TypeAdapter`
+instances. An adapter converts one declared runtime type into ordinary string-keyed records and
+ordered collections; its output is normalized recursively. Adapters cannot override canonical
+values, and ambiguous, duplicate, failing, or cyclic conversions are explicit errors.
+
+The optional Polars integration supplies adapters for eager `polars.DataFrame` values:
+
+```python
+from excel_template_writer.adapters.polars import polars_adapters
+from excel_template_writer.xlsx import render_workbook
+
+render_workbook(
+    "template.xlsx",
+    "output.xlsx",
+    {"lines": frame},
+    adapters=polars_adapters(),
+)
+```
+
+It preserves frame row order and column names, adds no index column, and converts Polars nulls and
+float NaNs to template `null`. It does not accept or collect `LazyFrame` values. Nanosecond
+`Datetime`, `Time`, and timezone-bearing `Datetime` columns are rejected because materializing them
+as Python values would lose precision or violate the canonical temporal model. Templates still use
+ordinary expressions such as `line.amount`; the adapter introduces no Polars-specific directive.
 
 ### Resource limits
 

@@ -57,23 +57,33 @@ normalized = normalize_context(context).require()
 ```
 
 A list of records is table-shaped input, not a special table type. Template directives and their
-rectangles decide whether those records render as rows, cards, or another layout. DataFrames and
-other library-specific objects can be converted by caller-supplied adapters without adding those
-libraries to the core package:
+rectangles decide whether those records render as rows, cards, or another layout. Polars support is
+an optional extra, so the base package does not import or install Polars:
 
 ```python
-from excel_template_writer import TypeAdapter, normalize_context
+import polars as pl
 
-frame_adapter = TypeAdapter(MyFrame, lambda frame: frame.to_dicts())
+from excel_template_writer import normalize_context
+from excel_template_writer.adapters.polars import polars_adapters
+
+frame = pl.DataFrame(
+    {"description": ["Service", "Support"], "amount": [125, 75]}
+)
 normalized = normalize_context(
-    {"rows": my_frame},
-    adapters=(frame_adapter,),
+    {"rows": frame},
+    adapters=polars_adapters(),
 ).require()
 ```
 
-Adapters are scoped to one call. Canonical values always keep their built-in meaning, and adapter
-output is recursively normalized. Concrete pandas, Polars, Arrow, and DuckDB adapters are not
-bundled yet.
+Install the integration in a consuming project with `uv add "excel-template-writer[polars]"`, or
+run this repository with `uv run --extra polars ...`. The adapter accepts eager `DataFrame` values,
+preserves row order, introduces no index, and converts null and nested float NaN values to canonical
+nulls. It deliberately does not collect a `LazyFrame`. Nanosecond/timezone-bearing temporal values
+that Python cannot represent without loss are rejected before materialization.
+
+Adapters remain scoped to one call. Canonical values always keep their built-in meaning, and
+adapter output is recursively normalized. Other integrations can use caller-supplied `TypeAdapter`
+instances; pandas, Arrow, and DuckDB adapters are not bundled yet.
 
 Every operation also uses an immutable `ResourceLimits` policy. The defaults are permissive for
 small business workbooks but bound context depth and size, repeat work, planned cells, worksheet
