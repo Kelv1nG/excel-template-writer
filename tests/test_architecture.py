@@ -1,4 +1,6 @@
 import ast
+import subprocess
+import sys
 from pathlib import Path
 
 
@@ -17,3 +19,14 @@ def test_phase_zero_core_does_not_import_openpyxl() -> None:
                 forbidden.append((path.name, node.module))
 
     assert forbidden == []
+
+
+def test_importing_core_and_adapter_namespace_does_not_import_polars() -> None:
+    script = """
+import sys
+import excel_template_writer
+import excel_template_writer.adapters
+assert "polars" not in sys.modules
+"""
+
+    subprocess.run([sys.executable, "-c", script], check=True)
