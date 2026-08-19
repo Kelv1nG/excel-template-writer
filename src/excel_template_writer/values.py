@@ -42,6 +42,12 @@ class NormalizedContext(Mapping[str, CanonicalValue]):
     _statistics: ContextStatistics
 
     def __init__(self) -> None:
+        """Prevent direct construction outside the normalization pipeline.
+
+        Raises:
+            TypeError: Always; callers must use :func:`normalize_context`.
+        """
+
         raise TypeError("NormalizedContext values are created by normalize_context()")
 
     @classmethod
@@ -50,6 +56,16 @@ class NormalizedContext(Mapping[str, CanonicalValue]):
         values: Mapping[str, CanonicalValue],
         statistics: ContextStatistics,
     ) -> NormalizedContext:
+        """Construct a normalized context from validated immutable-ready values.
+
+        Args:
+            values: Canonical root mapping to detach and expose read-only.
+            statistics: Measurements recorded while normalizing the mapping.
+
+        Returns:
+            A new immutable normalized context.
+        """
+
         instance = object.__new__(cls)
         object.__setattr__(instance, "_data", MappingProxyType(dict(values)))
         object.__setattr__(instance, "_statistics", statistics)
@@ -57,21 +73,48 @@ class NormalizedContext(Mapping[str, CanonicalValue]):
 
     @property
     def statistics(self) -> ContextStatistics:
+        """Return measurements retained from normalization."""
+
         return self._statistics
 
     def __getitem__(self, key: str) -> CanonicalValue:
+        """Return one canonical root value.
+
+        Args:
+            key: Root context key.
+
+        Returns:
+            The canonical value stored for ``key``.
+        """
+
         return self._data[key]
 
     def __iter__(self) -> Iterator[str]:
+        """Iterate root context keys in insertion order."""
+
         return iter(self._data)
 
     def __len__(self) -> int:
+        """Return the number of root context keys."""
+
         return len(self._data)
 
     def __repr__(self) -> str:
+        """Return a developer representation of the canonical mapping."""
+
         return f"NormalizedContext({dict(self._data)!r})"
 
     def __setattr__(self, name: str, value: object) -> None:
+        """Reject attribute mutation after construction.
+
+        Args:
+            name: Attribute a caller attempted to assign.
+            value: Attempted replacement value.
+
+        Raises:
+            TypeError: Always, because normalized contexts are immutable.
+        """
+
         raise TypeError("NormalizedContext is immutable")
 
 
@@ -83,7 +126,14 @@ class NormalizationResult:
     diagnostics: tuple[Diagnostic, ...]
 
     def require(self) -> NormalizedContext:
-        """Return the normalized context or raise all collected diagnostics."""
+        """Return the normalized context or raise collected diagnostics.
+
+        Returns:
+            The successfully normalized immutable context.
+
+        Raises:
+            TemplateRenderError: If normalization produced no context.
+        """
 
         if self.context is None:
             raise TemplateRenderError(self.diagnostics)
@@ -99,6 +149,13 @@ class TypeAdapter[T]:
     name: str | None = None
 
     def __post_init__(self) -> None:
+        """Validate the runtime source type, converter, and optional name.
+
+        Raises:
+            TypeError: If the source type or converter is invalid.
+            ValueError: If an explicitly supplied adapter name is empty.
+        """
+
         if not isinstance(self.source_type, type):
             raise TypeError("adapter source_type must be a runtime type")
         if not callable(self.converter):
@@ -108,9 +165,20 @@ class TypeAdapter[T]:
 
     @property
     def display_name(self) -> str:
+        """Return the explicit name or qualified runtime source type."""
+
         return self.name or _type_name(self.source_type)
 
     def convert(self, value: object) -> object:
+        """Convert one matching caller-owned value.
+
+        Args:
+            value: Runtime value previously matched to ``source_type``.
+
+        Returns:
+            Adapter output to normalize recursively.
+        """
+
         return self.converter(cast(T, value))
 
 
@@ -160,6 +228,8 @@ class _NormalizationState:
 
     @property
     def statistics(self) -> ContextStatistics:
+        """Return an immutable snapshot of accumulated context measurements."""
+
         return ContextStatistics(
             self.nodes,
             self.maximum_depth,
@@ -169,10 +239,30 @@ class _NormalizationState:
 
 
 def _diagnostic(code: DiagnosticCode, message: str, path: str) -> Diagnostic:
+    """Create a diagnostic at a canonical context path.
+
+    Args:
+        code: Stable diagnostic code.
+        message: Human-readable failure description.
+        path: Canonical path beginning with ``context``.
+
+    Returns:
+        The structured context diagnostic.
+    """
+
     return Diagnostic(code, message, ContextLocation(path))
 
 
 def _type_name(value_or_type: object) -> str:
+    """Return a stable qualified runtime type name.
+
+    Args:
+        value_or_type: Runtime value or type object to describe.
+
+    Returns:
+        An unqualified built-in name or qualified external type name.
+    """
+
     value_type = value_or_type if isinstance(value_or_type, type) else type(value_or_type)
     if value_type.__module__ == "builtins":
         return value_type.__qualname__
@@ -180,12 +270,31 @@ def _type_name(value_or_type: object) -> str:
 
 
 def _key_path(parent: str, key: object) -> str:
+    """Append a mapping key to a canonical diagnostic path.
+
+    Args:
+        parent: Existing parent path.
+        key: Mapping key to represent.
+
+    Returns:
+        Dot notation for identifiers or bracket notation otherwise.
+    """
+
     if isinstance(key, str) and key.isidentifier():
         return f"{parent}.{key}"
     return f"{parent}[{key!r}]"
 
 
 def _is_timezone_aware(value: datetime | time) -> bool:
+    """Return whether a temporal value carries a usable UTC offset.
+
+    Args:
+        value: Datetime or time value to inspect.
+
+    Returns:
+        ``True`` for timezone-aware or invalid-offset values.
+    """
+
     try:
         return value.utcoffset() is not None
     except (OverflowError, ValueError):
@@ -193,10 +302,29 @@ def _is_timezone_aware(value: datetime | time) -> bool:
 
 
 def _is_ancestor(value: object, ancestors: tuple[object, ...]) -> bool:
+    """Return whether object identity appears in the active traversal chain.
+
+    Args:
+        value: Candidate value.
+        ancestors: Active ancestor objects.
+
+    Returns:
+        ``True`` when ``value`` is an ancestor by identity.
+    """
+
     return any(value is ancestor for ancestor in ancestors)
 
 
 def _is_canonical_runtime_type(value: object) -> bool:
+    """Return whether a value belongs to the built-in canonical input family.
+
+    Args:
+        value: Runtime value to classify.
+
+    Returns:
+        ``True`` for supported scalars, mappings, lists, and tuples.
+    """
+
     return value is None or isinstance(
         value,
         (str, bool, int, float, Decimal, date, time, Mapping, list, tuple),
@@ -208,6 +336,17 @@ def _record_resource_use(
     diagnostics: list[Diagnostic],
     state: _NormalizationState,
 ) -> bool:
+    """Record one canonical node and fail at the first exceeded limit.
+
+    Args:
+        action: Value visit being measured.
+        diagnostics: Mutable diagnostic accumulator.
+        state: Mutable normalization measurements and resource policy.
+
+    Returns:
+        ``True`` when a resource limit was exceeded for this action.
+    """
+
     value = action.value
     state.nodes += 1
     state.maximum_depth = max(state.maximum_depth, action.depth)
@@ -248,6 +387,16 @@ def _statistics_limit_diagnostic(
     statistics: ContextStatistics,
     limits: ResourceLimits,
 ) -> Diagnostic | None:
+    """Check retained context statistics against a possibly stricter policy.
+
+    Args:
+        statistics: Measurements retained by an existing normalized context.
+        limits: Resource ceilings requested for reuse.
+
+    Returns:
+        The first limit diagnostic, or ``None`` when reuse is safe.
+    """
+
     checks = (
         (
             statistics.nodes,
@@ -283,6 +432,15 @@ def _statistics_limit_diagnostic(
 def _duplicate_adapter_diagnostics(
     adapters: tuple[TypeAdapter[Any], ...],
 ) -> tuple[Diagnostic, ...]:
+    """Report source types registered by more than one adapter.
+
+    Args:
+        adapters: Configured adapters for one normalization call.
+
+    Returns:
+        Duplicate-registration diagnostics in source-type order.
+    """
+
     by_type: dict[type[object], list[TypeAdapter[Any]]] = {}
     for adapter in adapters:
         by_type.setdefault(adapter.source_type, []).append(adapter)
@@ -301,6 +459,16 @@ def _resolve_adapter(
     value: object,
     adapters: tuple[TypeAdapter[Any], ...],
 ) -> TypeAdapter[Any] | tuple[TypeAdapter[Any], ...] | None:
+    """Resolve the unique most-specific adapter for a runtime value.
+
+    Args:
+        value: Non-canonical runtime value requiring conversion.
+        adapters: Configured adapter candidates.
+
+    Returns:
+        One most-specific adapter, all ambiguous matches, or ``None``.
+    """
+
     matches = tuple(adapter for adapter in adapters if isinstance(value, adapter.source_type))
     if not matches:
         return None
@@ -320,6 +488,15 @@ def _visit_mapping(
     actions: list[_Action],
     diagnostics: list[Diagnostic],
 ) -> None:
+    """Schedule iterative normalization of a mapping value.
+
+    Args:
+        action: Current mapping visit and destination slot.
+        value: Mapping being normalized.
+        actions: Mutable traversal stack.
+        diagnostics: Mutable diagnostic accumulator.
+    """
+
     if _is_ancestor(value, action.ancestors):
         diagnostics.append(
             _diagnostic(
@@ -369,6 +546,15 @@ def _visit_sequence(
     actions: list[_Action],
     diagnostics: list[Diagnostic],
 ) -> None:
+    """Schedule iterative normalization of a list or tuple.
+
+    Args:
+        action: Current sequence visit and destination slot.
+        value: Ordered sequence being normalized.
+        actions: Mutable traversal stack.
+        diagnostics: Mutable diagnostic accumulator.
+    """
+
     if _is_ancestor(value, action.ancestors):
         diagnostics.append(
             _diagnostic(
@@ -397,6 +583,12 @@ def _visit_sequence(
 
 
 def _build_mapping(action: _BuildMapping) -> None:
+    """Assemble a read-only canonical mapping after child visits finish.
+
+    Args:
+        action: Deferred mapping build action and target slot.
+    """
+
     if action.has_invalid_key or any(entry.value is _INVALID for _, entry in action.entries):
         action.target.value = _INVALID
         return
@@ -406,6 +598,12 @@ def _build_mapping(action: _BuildMapping) -> None:
 
 
 def _build_sequence(action: _BuildSequence) -> None:
+    """Assemble an immutable canonical tuple after child visits finish.
+
+    Args:
+        action: Deferred sequence build action and target slot.
+    """
+
     if any(entry.value is _INVALID for entry in action.entries):
         action.target.value = _INVALID
         return
@@ -419,6 +617,16 @@ def _visit_value(
     adapters: tuple[TypeAdapter[Any], ...],
     state: _NormalizationState,
 ) -> None:
+    """Normalize one value or schedule its children and adapter output.
+
+    Args:
+        action: Current value visit and target slot.
+        actions: Mutable iterative traversal stack.
+        diagnostics: Mutable diagnostic accumulator.
+        adapters: Explicit runtime-type adapters.
+        state: Mutable resource measurements and policy.
+    """
+
     value = action.value
 
     if _is_canonical_runtime_type(value) and _record_resource_use(action, diagnostics, state):
@@ -565,7 +773,16 @@ def normalize_context(
     adapters: Iterable[TypeAdapter[Any]] = (),
     limits: ResourceLimits = DEFAULT_RESOURCE_LIMITS,
 ) -> NormalizationResult:
-    """Adapt and immutably normalize a complete render context."""
+    """Adapt and immutably normalize a complete render context.
+
+    Args:
+        context: Raw mapping or reusable :class:`NormalizedContext`.
+        adapters: Explicit converters for caller-owned runtime types.
+        limits: Resource ceilings applied after every conversion.
+
+    Returns:
+        An immutable context with statistics, or structured diagnostics.
+    """
 
     configured_adapters = tuple(adapters)
     diagnostics = list(_duplicate_adapter_diagnostics(configured_adapters))
@@ -618,19 +835,41 @@ def validate_context(
     *,
     limits: ResourceLimits = DEFAULT_RESOURCE_LIMITS,
 ) -> tuple[Diagnostic, ...]:
-    """Validate a value tree using the canonical no-adapter boundary."""
+    """Validate a value tree using the canonical no-adapter boundary.
+
+    Args:
+        context: Raw value expected to be a canonical context mapping.
+        limits: Resource ceilings applied during validation.
+
+    Returns:
+        All canonical-value diagnostics; empty when valid.
+    """
 
     return normalize_context(context, limits=limits).diagnostics
 
 
 def is_collection_value(value: object) -> bool:
-    """Return whether a canonical value is non-scalar."""
+    """Return whether a canonical value is non-scalar.
+
+    Args:
+        value: Canonical runtime value to classify.
+
+    Returns:
+        ``True`` for records and ordered collections.
+    """
 
     return isinstance(value, (Mapping, list, tuple))
 
 
 def is_ordered_collection(value: object) -> bool:
-    """Return whether a canonical value may drive a repeat."""
+    """Return whether a canonical value may drive a repeat.
+
+    Args:
+        value: Canonical runtime value to classify.
+
+    Returns:
+        ``True`` for lists and tuples, but not mappings.
+    """
 
     return isinstance(value, (list, tuple))
 

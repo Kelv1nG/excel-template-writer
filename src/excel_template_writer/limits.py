@@ -28,6 +28,12 @@ class ResourceLimits:
     max_xlsx_archive_members: int = 10_000
 
     def __post_init__(self) -> None:
+        """Reject non-integer or non-positive resource ceilings.
+
+        Raises:
+            ValueError: If any configured ceiling is not a positive integer.
+        """
+
         for field in fields(self):
             value = getattr(self, field.name)
             if type(value) is not int or value <= 0:

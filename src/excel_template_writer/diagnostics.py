@@ -62,6 +62,8 @@ class SourceLocation:
     end: int | None = None
 
     def __str__(self) -> str:
+        """Return the worksheet and cell location in diagnostic notation."""
+
         suffix = "" if self.start is None else f":{self.start}"
         return f"{self.sheet}!{self.cell}{suffix}"
 
@@ -71,6 +73,8 @@ class ContextLocation:
     path: str
 
     def __str__(self) -> str:
+        """Return the canonical context path."""
+
         return self.path
 
 
@@ -81,6 +85,8 @@ class Diagnostic:
     location: SourceLocation | ContextLocation
 
     def __str__(self) -> str:
+        """Format the code, location, and message for human-readable output."""
+
         return f"{self.code} {self.location}: {self.message}"
 
 
@@ -88,6 +94,12 @@ class TemplateError(Exception):
     """Base exception carrying structured diagnostics."""
 
     def __init__(self, diagnostics: Iterable[Diagnostic]) -> None:
+        """Create an exception from one or more structured diagnostics.
+
+        Args:
+            diagnostics: Diagnostics to retain and join into the exception message.
+        """
+
         self.diagnostics = tuple(diagnostics)
         super().__init__("\n".join(str(item) for item in self.diagnostics))
 

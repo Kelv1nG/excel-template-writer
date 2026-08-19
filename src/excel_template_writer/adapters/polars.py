@@ -12,6 +12,15 @@ from excel_template_writer.values import TypeAdapter
 
 
 def _contains_lossy_python_temporal(dtype: object) -> bool:
+    """Return whether a Polars dtype loses temporal precision in Python.
+
+    Args:
+        dtype: Polars dtype, possibly nested in a list, array, or struct.
+
+    Returns:
+        ``True`` for nanosecond datetimes, times, or nested occurrences.
+    """
+
     if isinstance(dtype, pl.Datetime):
         return dtype.time_unit == "ns"
     if dtype == pl.Time:
@@ -24,6 +33,15 @@ def _contains_lossy_python_temporal(dtype: object) -> bool:
 
 
 def _contains_timezone_aware_datetime(dtype: object) -> bool:
+    """Return whether a Polars dtype contains a timezone-aware datetime.
+
+    Args:
+        dtype: Polars dtype, possibly nested in a list, array, or struct.
+
+    Returns:
+        ``True`` when any contained datetime has a timezone.
+    """
+
     if isinstance(dtype, pl.Datetime):
         return dtype.time_zone is not None
     if isinstance(dtype, (pl.List, pl.Array)):
@@ -34,7 +52,14 @@ def _contains_timezone_aware_datetime(dtype: object) -> bool:
 
 
 def _replace_float_nans(value: object) -> object:
-    """Copy Polars materialized containers while replacing float NaNs with nulls."""
+    """Copy materialized containers while replacing float NaNs with nulls.
+
+    Args:
+        value: Scalar or nested mapping/list/tuple materialized by Polars.
+
+    Returns:
+        A detached structure in which every float NaN is ``None``.
+    """
 
     root_key = object()
     root: dict[object, object] = {root_key: None}
@@ -69,6 +94,18 @@ def _replace_float_nans(value: object) -> object:
 
 
 def _convert_dataframe(frame: pl.DataFrame) -> object:
+    """Convert an eager Polars frame into ordered canonical-ready records.
+
+    Args:
+        frame: Eager Polars data frame to materialize.
+
+    Returns:
+        A list of row dictionaries with NaNs converted to ``None``.
+
+    Raises:
+        ValueError: If columns are invalid or temporal values cannot be preserved.
+    """
+
     columns = frame.columns
     if any(not isinstance(column, str) for column in columns):
         raise ValueError("Polars DataFrame columns must all be strings")
@@ -99,7 +136,11 @@ def _convert_dataframe(frame: pl.DataFrame) -> object:
 
 
 def polars_adapters() -> tuple[TypeAdapter[pl.DataFrame], ...]:
-    """Return the explicit adapters for supported Polars runtime types."""
+    """Return explicit adapters for supported Polars runtime types.
+
+    Returns:
+        A one-item tuple containing the eager ``polars.DataFrame`` adapter.
+    """
 
     return (TypeAdapter(pl.DataFrame, _convert_dataframe, name="polars.DataFrame"),)
 

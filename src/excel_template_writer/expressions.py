@@ -12,6 +12,13 @@ from typing import Any
 
 class ExpressionSyntaxError(ValueError):
     def __init__(self, message: str, position: int = 0) -> None:
+        """Create a syntax error at a character offset.
+
+        Args:
+            message: Human-readable syntax failure.
+            position: Zero-based offset in the expression source.
+        """
+
         self.position = position
         super().__init__(message)
 
@@ -22,6 +29,13 @@ class ExpressionEvaluationError(ValueError):
 
 class MissingValueError(ExpressionEvaluationError):
     def __init__(self, root: str, path: str) -> None:
+        """Create a missing-value error with a stable root and display path.
+
+        Args:
+            root: Top-level context name whose lookup failed.
+            path: Human-readable expression path that was unavailable.
+        """
+
         self.root = root
         self.path = path
         super().__init__(f"missing value: {path}")
@@ -110,6 +124,18 @@ _TOKEN_PATTERN = re.compile(
 
 
 def _tokenize(source: str) -> tuple[_Token, ...]:
+    """Tokenize expression source and append an explicit end token.
+
+    Args:
+        source: Expression text without template delimiters.
+
+    Returns:
+        Immutable lexical tokens ending in ``EOF``.
+
+    Raises:
+        ExpressionSyntaxError: If the source contains an unsupported character.
+    """
+
     tokens: list[_Token] = []
     position = 0
     while position < len(source):
@@ -151,32 +177,67 @@ def _tokenize(source: str) -> tuple[_Token, ...]:
 
 class _Parser:
     def __init__(self, source: str) -> None:
+        """Initialize a recursive-descent parser for one expression.
+
+        Args:
+            source: Expression text to tokenize and parse.
+        """
+
         self._source = source
         self._tokens = _tokenize(source)
         self._index = 0
 
     @property
     def current(self) -> _Token:
+        """Return the token at the parser cursor."""
+
         return self._tokens[self._index]
 
     def advance(self) -> _Token:
+        """Consume and return the current token."""
+
         token = self.current
         self._index += 1
         return token
 
     def accept(self, kind: _TokenKind, value: str | None = None) -> _Token | None:
+        """Consume the current token when its kind and optional value match.
+
+        Args:
+            kind: Required token kind.
+            value: Optional exact token value.
+
+        Returns:
+            The consumed token, or ``None`` when it does not match.
+        """
+
         token = self.current
         if token.kind is kind and (value is None or token.value == value):
             return self.advance()
         return None
 
     def expect(self, kind: _TokenKind, message: str) -> _Token:
+        """Consume a required token or raise a positioned syntax error.
+
+        Args:
+            kind: Required token kind.
+            message: Error message used when the token is absent.
+
+        Returns:
+            The consumed token.
+
+        Raises:
+            ExpressionSyntaxError: If the current token has another kind.
+        """
+
         token = self.accept(kind)
         if token is None:
             raise ExpressionSyntaxError(message, self.current.position)
         return token
 
     def parse(self) -> Expression:
+        """Parse one complete expression and require end-of-input."""
+
         expression = self.parse_pipeline()
         if self.current.kind is not _TokenKind.EOF:
             raise ExpressionSyntaxError(
@@ -185,6 +246,8 @@ class _Parser:
         return expression
 
     def parse_pipeline(self) -> Expression:
+        """Parse a base expression followed by zero or more filters."""
+
         expression = self.parse_or()
         while self.accept(_TokenKind.PIPE):
             name = self.expect(_TokenKind.IDENTIFIER, "expected a filter name").value
@@ -199,6 +262,8 @@ class _Parser:
         return expression
 
     def parse_or(self) -> Expression:
+        """Parse left-associative boolean ``or`` expressions."""
+
         expression = self.parse_and()
         while self.current.kind is _TokenKind.IDENTIFIER and self.current.value == "or":
             self.advance()
@@ -206,6 +271,8 @@ class _Parser:
         return expression
 
     def parse_and(self) -> Expression:
+        """Parse left-associative boolean ``and`` expressions."""
+
         expression = self.parse_comparison()
         while self.current.kind is _TokenKind.IDENTIFIER and self.current.value == "and":
             self.advance()
@@ -213,6 +280,8 @@ class _Parser:
         return expression
 
     def parse_comparison(self) -> Expression:
+        """Parse supported equality and ordering comparisons."""
+
         expression = self.parse_unary()
         comparisons = {
             _TokenKind.EQ: "==",
@@ -228,12 +297,16 @@ class _Parser:
         return expression
 
     def parse_unary(self) -> Expression:
+        """Parse unary ``not`` or delegate to postfix parsing."""
+
         if self.current.kind is _TokenKind.IDENTIFIER and self.current.value == "not":
             self.advance()
             return UnaryExpression("not", self.parse_unary())
         return self.parse_postfix()
 
     def parse_postfix(self) -> Expression:
+        """Parse mapping member and index access following a primary value."""
+
         expression = self.parse_primary()
         while True:
             if self.accept(_TokenKind.DOT):
@@ -247,6 +320,8 @@ class _Parser:
                 return expression
 
     def parse_primary(self) -> Expression:
+        """Parse literals, names, and parenthesized expressions."""
+
         token = self.current
         if self.accept(_TokenKind.LEFT_PAREN):
             expression = self.parse_pipeline()
@@ -274,12 +349,33 @@ class _Parser:
 
 
 def parse_expression(source: str) -> Expression:
+    """Parse source text into the safe expression AST.
+
+    Args:
+        source: Expression text without ``{{`` or ``}}`` delimiters.
+
+    Returns:
+        The root expression node.
+
+    Raises:
+        ExpressionSyntaxError: If the expression is empty or malformed.
+    """
+
     if not source.strip():
         raise ExpressionSyntaxError("expression cannot be empty")
     return _Parser(source).parse()
 
 
 def _root_path(expression: Expression) -> tuple[str, str]:
+    """Describe the root context name and display path of an access chain.
+
+    Args:
+        expression: Expression whose access path should be described.
+
+    Returns:
+        A ``(root, path)`` pair, or generic placeholders for computed values.
+    """
+
     if isinstance(expression, NameExpression):
         return expression.name, expression.name
     if isinstance(expression, AttributeExpression):
@@ -292,6 +388,21 @@ def _root_path(expression: Expression) -> tuple[str, str]:
 
 
 def _evaluate(expression: Expression, scope: Mapping[str, Any]) -> Any:
+    """Evaluate one expression node against a canonical lexical scope.
+
+    Args:
+        expression: Expression node to evaluate.
+        scope: Current canonical variable mapping.
+
+    Returns:
+        The resulting canonical or intermediate scalar value.
+
+    Raises:
+        ExpressionEvaluationError: If access or a filter is unsupported.
+        MissingValueError: If a referenced value cannot be found.
+        TypeError: If an unknown AST node is encountered.
+    """
+
     if isinstance(expression, LiteralExpression):
         return expression.value
     if isinstance(expression, NameExpression):
@@ -359,13 +470,31 @@ def _evaluate(expression: Expression, scope: Mapping[str, Any]) -> Any:
 
 
 def evaluate_expression(expression: Expression, scope: Mapping[str, Any]) -> Any:
-    """Evaluate without attribute access, calls, imports, or arbitrary Python execution."""
+    """Evaluate without attribute access, calls, imports, or Python execution.
+
+    Args:
+        expression: Parsed expression AST.
+        scope: Canonical lexical scope visible to the expression.
+
+    Returns:
+        The evaluated value.
+
+    Raises:
+        ExpressionEvaluationError: If evaluation violates the safe expression contract.
+    """
 
     return _evaluate(expression, scope)
 
 
 def expression_root_names(expression: Expression) -> Sequence[str]:
-    """Return names read by an expression; useful for future static validation."""
+    """Return unique root names read by an expression.
+
+    Args:
+        expression: Parsed expression tree to inspect.
+
+    Returns:
+        Root names in first-seen traversal order.
+    """
 
     names: list[str] = []
     if isinstance(expression, NameExpression):

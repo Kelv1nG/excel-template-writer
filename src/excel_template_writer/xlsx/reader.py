@@ -25,6 +25,15 @@ from excel_template_writer.xlsx.model import (
 
 
 def _dimension_presentation(dimension: Any) -> DimensionPresentation:
+    """Detach formatting shared by an openpyxl row or column dimension.
+
+    Args:
+        dimension: Openpyxl row or column dimension.
+
+    Returns:
+        Adapter-owned immutable presentation data.
+    """
+
     return DimensionPresentation(
         hidden=bool(dimension.hidden),
         outline_level=int(dimension.outlineLevel or 0),
@@ -39,6 +48,15 @@ def _dimension_presentation(dimension: Any) -> DimensionPresentation:
 
 
 def _read_rows(sheet: Worksheet) -> dict[int, RowPresentation]:
+    """Snapshot explicitly configured worksheet row dimensions.
+
+    Args:
+        sheet: Openpyxl worksheet to read.
+
+    Returns:
+        Row numbers mapped to detached presentation data.
+    """
+
     rows: dict[int, RowPresentation] = {}
     for index, dimension in sheet.row_dimensions.items():
         common = _dimension_presentation(dimension)
@@ -52,6 +70,15 @@ def _read_rows(sheet: Worksheet) -> dict[int, RowPresentation]:
 
 
 def _read_columns(sheet: Worksheet) -> dict[int, ColumnPresentation]:
+    """Expand and snapshot explicitly configured column dimensions.
+
+    Args:
+        sheet: Openpyxl worksheet to read.
+
+    Returns:
+        Column indexes mapped to detached presentation data.
+    """
+
     columns: dict[int, ColumnPresentation] = {}
     for key, dimension in sheet.column_dimensions.items():
         common = _dimension_presentation(dimension)
@@ -67,6 +94,15 @@ def _read_columns(sheet: Worksheet) -> dict[int, ColumnPresentation]:
 
 
 def _read_merges(sheet: Worksheet) -> tuple[Rectangle, ...]:
+    """Convert openpyxl merged ranges into pure inclusive rectangles.
+
+    Args:
+        sheet: Openpyxl worksheet to inspect.
+
+    Returns:
+        Immutable merged rectangles in worksheet order.
+    """
+
     ranges = cast(Iterable[CellRange], sheet.merged_cells.ranges)
     return tuple(
         Rectangle(
@@ -80,10 +116,28 @@ def _read_merges(sheet: Worksheet) -> tuple[Rectangle, ...]:
 
 
 def _optional_float(value: Any) -> float | None:
+    """Convert an optional numeric openpyxl property to ``float``.
+
+    Args:
+        value: Optional numeric property.
+
+    Returns:
+        ``None`` or the equivalent float value.
+    """
+
     return None if value is None else float(value)
 
 
 def _merge_coordinates(merged_ranges: tuple[Rectangle, ...]) -> set[Coordinate]:
+    """Enumerate every coordinate occupied by merged ranges.
+
+    Args:
+        merged_ranges: Inclusive merged rectangles.
+
+    Returns:
+        Coordinates belonging to at least one merge.
+    """
+
     return {
         Coordinate(row, column)
         for merged in merged_ranges
@@ -93,6 +147,15 @@ def _merge_coordinates(merged_ranges: tuple[Rectangle, ...]) -> set[Coordinate]:
 
 
 def _read_sheet(sheet: Worksheet) -> SheetSnapshot:
+    """Detach supported values, presentation, dimensions, and feature flags.
+
+    Args:
+        sheet: Openpyxl worksheet to snapshot.
+
+    Returns:
+        Immutable adapter-owned worksheet state.
+    """
+
     merged_ranges = _read_merges(sheet)
     merge_coordinates = _merge_coordinates(merged_ranges)
     values: dict[Coordinate, Any] = {}
@@ -164,7 +227,14 @@ def _read_sheet(sheet: Worksheet) -> SheetSnapshot:
 
 
 def read_workbook(path: str | Path) -> WorkbookSnapshot:
-    """Load a non-macro XLSX workbook and detach the supported workbook state."""
+    """Load a non-macro XLSX workbook and detach supported state.
+
+    Args:
+        path: Input ``.xlsx`` path.
+
+    Returns:
+        Immutable workbook snapshot containing no live openpyxl objects.
+    """
 
     workbook = load_workbook(path, data_only=False, keep_links=False)
     try:

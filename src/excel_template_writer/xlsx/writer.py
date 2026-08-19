@@ -31,6 +31,13 @@ def _apply_dimension_style(
     destination: RowDimension | ColumnDimension,
     source: DimensionPresentation,
 ) -> None:
+    """Copy formatting shared by row and column dimensions.
+
+    Args:
+        destination: Mutable openpyxl dimension receiving formatting.
+        source: Detached source dimension presentation.
+    """
+
     destination.font = copy(source.font)
     destination.fill = copy(source.fill)
     destination.border = copy(source.border)
@@ -40,6 +47,13 @@ def _apply_dimension_style(
 
 
 def _apply_row(destination: RowDimension, source: RowPresentation) -> None:
+    """Apply detached row presentation to an output row dimension.
+
+    Args:
+        destination: Mutable output row dimension.
+        source: Detached source row presentation.
+    """
+
     destination.height = source.height
     destination.hidden = source.hidden
     destination.outlineLevel = source.outline_level
@@ -50,6 +64,13 @@ def _apply_row(destination: RowDimension, source: RowPresentation) -> None:
 
 
 def _apply_column(destination: ColumnDimension, source: ColumnPresentation) -> None:
+    """Apply detached column presentation to an output column dimension.
+
+    Args:
+        destination: Mutable output column dimension.
+        source: Detached source column presentation.
+    """
+
     destination.width = source.width
     destination.hidden = source.hidden
     destination.outlineLevel = source.outline_level
@@ -59,6 +80,14 @@ def _apply_column(destination: ColumnDimension, source: ColumnPresentation) -> N
 
 
 def _apply_cell(destination: Cell, source: CellPresentation, value: object) -> None:
+    """Write one planned value and copy its direct source presentation.
+
+    Args:
+        destination: Mutable output cell.
+        source: Detached source cell presentation.
+        value: Evaluated planned value to write.
+    """
+
     destination.value = value
     if isinstance(value, str) and value.startswith("=") and not source.is_formula:
         destination.data_type = "s"
@@ -74,6 +103,16 @@ def _apply_cell(destination: Cell, source: CellPresentation, value: object) -> N
 
 
 def _is_identity_plan(source: SheetSnapshot, plan: RenderPlan) -> bool:
+    """Return whether a plan leaves every supported coordinate unchanged.
+
+    Args:
+        source: Source worksheet snapshot.
+        plan: Completed render plan.
+
+    Returns:
+        ``True`` when cell and merge coordinates are identical.
+    """
+
     cell_mappings = [(cell.source_coordinate, cell.coordinate) for cell in plan.cells]
     source_merges = set(source.template.merged_ranges)
     planned_merges = {
@@ -89,6 +128,14 @@ def _is_identity_plan(source: SheetSnapshot, plan: RenderPlan) -> bool:
 
 
 def _write_sheet(destination: Worksheet, source: SheetSnapshot, plan: RenderPlan) -> None:
+    """Apply one complete validated plan to a new worksheet.
+
+    Args:
+        destination: Empty mutable destination worksheet.
+        source: Detached source worksheet state.
+        plan: Complete adapter-neutral render plan.
+    """
+
     destination.sheet_view.showGridLines = source.show_grid_lines
     destination.freeze_panes = source.freeze_panes
     destination.sheet_properties.tabColor = copy(source.tab_color)
@@ -130,7 +177,20 @@ def write_workbook(
     *,
     limits: ResourceLimits,
 ) -> Path:
-    """Write atomically and reopen the serialized package before publishing it."""
+    """Write atomically and reopen the package before publishing it.
+
+    Args:
+        snapshot: Detached source workbook state.
+        plans: One complete render plan per source worksheet.
+        output_path: Destination path, which must differ from the template path.
+        limits: Package ceilings checked before publication.
+
+    Returns:
+        Resolved destination path after successful verification.
+
+    Raises:
+        TemplateRenderError: If the serialized package exceeds resource limits.
+    """
 
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)

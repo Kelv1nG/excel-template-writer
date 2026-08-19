@@ -38,7 +38,22 @@ def render_workbook(
     adapters: Iterable[TypeAdapter[Any]] = (),
     limits: ResourceLimits = DEFAULT_RESOURCE_LIMITS,
 ) -> WorkbookRenderResult:
-    """Compile and plan all sheets before atomically writing a separate XLSX file."""
+    """Compile and plan all sheets before writing a separate XLSX file.
+
+    Args:
+        template_path: Existing input ``.xlsx`` template path.
+        output_path: Separate destination ``.xlsx`` path.
+        context: Raw render-context mapping or normalized context.
+        adapters: Explicit converters for caller-owned runtime types.
+        limits: Resource ceilings shared across the complete operation.
+
+    Returns:
+        The published output path and operation diagnostics.
+
+    Raises:
+        TemplateCompilationError: If paths, syntax, geometry, or workbook features are invalid.
+        TemplateRenderError: If normalization, evaluation, or resource planning fails.
+    """
 
     source_path = Path(template_path).resolve()
     destination_path = Path(output_path).resolve()

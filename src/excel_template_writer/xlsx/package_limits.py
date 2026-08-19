@@ -11,10 +11,29 @@ from excel_template_writer.limits import ResourceLimits
 
 
 def _diagnostic(code: DiagnosticCode, message: str) -> Diagnostic:
+    """Create a workbook-level package diagnostic.
+
+    Args:
+        code: Stable package diagnostic code.
+        message: Human-readable package failure.
+
+    Returns:
+        A diagnostic located at the synthetic workbook source.
+    """
+
     return Diagnostic(code, message, SourceLocation("<workbook>", "A1"))
 
 
 def _worksheet_count(archive: ZipFile) -> int:
+    """Count worksheet declarations without extracting the XLSX archive.
+
+    Args:
+        archive: Open XLSX ZIP archive.
+
+    Returns:
+        Declared worksheet count, or zero when workbook XML is absent.
+    """
+
     try:
         workbook_xml = archive.open("xl/workbook.xml")
     except KeyError:
@@ -34,7 +53,16 @@ def inspect_xlsx_package(
     *,
     description: str,
 ) -> Diagnostic | None:
-    """Return the first package-limit failure without extracting the archive."""
+    """Return the first package-limit failure without extracting the archive.
+
+    Args:
+        path: XLSX package path to inspect.
+        limits: Configured package and worksheet ceilings.
+        description: Human-readable package role used in diagnostics.
+
+    Returns:
+        The first resource diagnostic, or ``None`` when within limits.
+    """
 
     package_path = Path(path)
     compressed_bytes = package_path.stat().st_size

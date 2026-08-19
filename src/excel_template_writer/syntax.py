@@ -16,6 +16,12 @@ class SourceSpan:
 
     @property
     def location(self) -> SourceLocation:
+        """Return this span as a diagnostic source location.
+
+        Returns:
+            A source location carrying the worksheet, cell, and offsets.
+        """
+
         return SourceLocation(self.sheet, self.cell, self.start, self.end)
 
 
@@ -47,6 +53,17 @@ class CellLexResult:
 
 
 def lex_cell(sheet: str, cell: str, value: str) -> CellLexResult:
+    """Tokenize one cell without interpreting expressions or directives.
+
+    Args:
+        sheet: Worksheet name used in source locations.
+        cell: A1 cell address used in source locations.
+        value: Raw string value stored in the cell.
+
+    Returns:
+        Tokens with source spans, or a lexical diagnostic when tokenization fails.
+    """
+
     tokens: list[CellToken] = []
     position = 0
     while position < len(value):

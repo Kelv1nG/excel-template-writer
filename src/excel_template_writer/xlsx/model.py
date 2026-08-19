@@ -73,6 +73,8 @@ class SheetSnapshot:
     has_drawings: bool
 
     def __post_init__(self) -> None:
+        """Detach mutable presentation, row, and column mappings."""
+
         object.__setattr__(self, "cells", MappingProxyType(dict(self.cells)))
         object.__setattr__(self, "rows", MappingProxyType(dict(self.rows)))
         object.__setattr__(self, "columns", MappingProxyType(dict(self.columns)))
