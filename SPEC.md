@@ -289,6 +289,33 @@ Adapter output is recursively normalized at the same context path. It may contai
 values. An adapter exception, unsupported output, direct or indirect conversion cycle, or ambiguous
 adapter match produces a diagnostic and no normalized context.
 
+#### 9.3.1 Bundled Polars adapter
+
+The optional `polars` package extra provides `polars_adapters()`. The function returns caller-scoped
+`TypeAdapter` instances and does not register mutable global state. Importing the core package does
+not import or require Polars.
+
+The first bundled adapter accepts eager `polars.DataFrame` values only. It does not accept or collect
+`LazyFrame` values, execute queries, or treat `Series` as an implicit collection. Callers must make
+those operations explicit before rendering.
+
+For an accepted frame, the adapter:
+
+- preserves frame row order and declared column order;
+- requires unique string column names and emits one record per row;
+- introduces no index field because Polars has no implicit row index;
+- converts Polars null values and floating-point NaN values, including nested NaN values, to
+  canonical `null`;
+- materializes Python-native scalar values and delegates their recursive validation to canonical
+  normalization at the original context path.
+
+Polars nanosecond `Datetime` values, `Time` values, and timezone-bearing `Datetime` values are
+rejected before materialization. Python temporal objects cannot preserve nanosecond precision, and
+timezone-aware temporal values are outside the canonical model. Library values that have no
+canonical scalar representation, including duration, binary, or object values, are rejected by the
+ordinary canonical-value diagnostics after conversion. The adapter never stringifies unsupported
+values to make them renderable.
+
 ### 9.4 Normalization result and immutability
 
 `normalize_context(raw_context, adapters)` validates and converts the complete input before template
