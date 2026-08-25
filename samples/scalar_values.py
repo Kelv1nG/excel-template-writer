@@ -48,6 +48,16 @@ def build_template(path: Path = TEMPLATE_PATH) -> Path:
         ("Integer", "{{ invoice.quantity }}", "native number"),
         ("Decimal", "{{ invoice.amount }}", "currency-formatted number"),
         ("Date", "{{ invoice.issued_on }}", "native date"),
+        (
+            "Date text filter",
+            '{{ invoice.issued_on | date("YYYY-mm") }}',
+            "explicit text: 2026-08",
+        ),
+        (
+            "Date in sentence",
+            'For the month ending {{ invoice.issued_on | date("dd mmmm yyyy") }}',
+            "formatted text in mixed content",
+        ),
         ("Boolean", "{{ invoice.approved }}", "native boolean"),
         ("Mixed text", "Invoice {{ invoice.number }}", "always text"),
         ("Upper filter", "{{ customer.name | upper }}", "uppercase text"),
@@ -104,9 +114,13 @@ def render_sample(
         assert sheet["B6"].value == 3
         assert sheet["B7"].value == 1250.75
         assert sheet["B8"].data_type == "d"
-        assert sheet["B9"].value is True
-        assert sheet["B10"].value == "Invoice INV-1042"
-        assert sheet["B13"].value == "not supplied"
+        assert sheet["B9"].value == "2026-08"
+        assert sheet["B9"].data_type == "s"
+        assert sheet["B10"].value == "For the month ending 19 August 2026"
+        assert sheet["B10"].data_type == "s"
+        assert sheet["B11"].value is True
+        assert sheet["B12"].value == "Invoice INV-1042"
+        assert sheet["B15"].value == "not supplied"
     finally:
         workbook.close()
     return output_path

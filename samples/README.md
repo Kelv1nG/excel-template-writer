@@ -25,7 +25,7 @@ When the optional dependency is absent, the generator prints one Polars skip mes
 
 | Python module | Generated workbooks | Current features demonstrated |
 | --- | --- | --- |
-| `samples.scalar_values` | `scalar_values_template.xlsx`, `scalar_values_output.xlsx` | Native scalar cells, mixed text, mapping access, dates, booleans, `upper`, `join`, and `default` filters |
+| `samples.scalar_values` | `scalar_values_template.xlsx`, `scalar_values_output.xlsx` | Native scalar cells, mixed text, mapping access, native dates versus the textual `date` filter, booleans, `upper`, `join`, and `default` filters |
 | `samples.repeated_blocks` | `repeated_blocks_template.xlsx`, `repeated_blocks_output.xlsx` | One-cell lists, styled rectangular table rows, row shifting, formatted blanks, merged footers, and empty-repeat placeholders |
 | `samples.conditions_and_nesting` | `conditions_and_nesting_template.xlsx`, `conditions_and_nesting_output.xlsx` | `if`/`else`, no-`else` conditions, boolean expressions, nested repeats, lexical scope, and bottom-up measurement |
 | `samples.cell_shift_lanes` | `cell_shift_lanes_template.xlsx`, `cell_shift_lanes_output.xlsx` | Side-by-side `shift="cells"` repeats with independently moving lanes and stationary neighboring cells |
