@@ -161,8 +161,57 @@ Private names or keys beginning with `_`, imports, assignment, comprehensions, l
 | `upper` | Convert to uppercase text. | `customer.name \| upper` |
 | `lower` | Convert to lowercase text. | `customer.name \| lower` |
 | `join(separator)` | Join collection items as text. The default separator is `", "`. | `labels \| join(" / ")` |
+| `date(format)` | Format a native date or datetime as deterministic text. | `report_date \| date("dd mmmm yyyy")` |
 
-The filters `date`, `datetime`, `number`, and `money` appear in the broader specification as proposed features but are not executable yet. Use workbook number formats for the current demo where possible.
+Filter names, argument counts, and literal argument types are checked while compiling the template.
+Unknown filters and dynamic arguments such as `date(format_variable)` are errors. The filters
+`datetime`, `number`, and `money` remain proposed and are not executable yet.
+
+#### `date(format)`
+
+Use `date` when a native date must become text, especially inside a sentence:
+
+```text
+{{ report_date | date("yyyy-mm") }}
+For the month ending {{ report_date | date("dd mmmm yyyy") }}
+```
+
+The case-insensitive format codes are:
+
+| Code | Output for 2026-08-31 |
+| --- | --- |
+| `yyyy`, `yy` | `2026`, `26` |
+| `mmmm`, `mmm` | `August`, `Aug` |
+| `mm`, `m` | `08`, `8` |
+| `dddd`, `ddd` | `Monday`, `Mon` |
+| `dd`, `d` | `31`, `31` |
+
+Spaces and ordinary punctuation are literal. For literal words inside the format, use an
+Excel-style double-quoted section while quoting the complete expression argument with single
+quotes:
+
+```text
+{{ report_date | date('dd "of" mmmm yyyy') }}
+```
+
+A backslash escapes the next format character. The engine rejects empty formats, unknown letters,
+unsupported field widths, braces such as `{yyyy}`, Python `%Y` codes, unterminated quoted text, and
+advanced Excel number-format constructs. Month and weekday names are English in the current
+release.
+
+The input must be a native `date` or `datetime` value. A datetime contributes only its calendar
+date. Strings, numbers, and `null` are rejected instead of being parsed or guessed. Missing values
+remain missing-value errors.
+
+`date` always returns text, including when it is the only expression in a cell. To preserve a
+native Excel date, keep the expression unfiltered and format the placeholder cell in Excel:
+
+```text
+{{ report_date }}
+```
+
+For example, the Excel custom number format `"For the month ending "dd mmmm yyyy` displays a full
+label while preserving the underlying date value.
 
 ## `for` and `endfor`
 
@@ -422,6 +471,8 @@ than `rows` or `cells` are rejected during compilation.
 | `E1101` | Invalid expression syntax |
 | `E1102` | Invalid or unsupported directive syntax |
 | `E1103` | Unknown directive option; reserved in the current diagnostics model |
+| `E1104` | Unknown filter or invalid filter argument contract |
+| `E1105` | Invalid or unsupported `date` format |
 | `E1201` | Unmatched block marker |
 | `E1202` | Invalid block geometry |
 | `E1203` | Ambiguous block pairing |
@@ -430,6 +481,7 @@ than `rows` or `cells` are rejected during compilation.
 | `E1301` | Missing value during rendering |
 | `E1302` | Collection used as a scalar cell value |
 | `E1303` | `for` expression did not produce a supported collection |
+| `E1304` | Runtime value has the wrong type for a compiled filter |
 | `E1401` | Two source allocations collided at one destination cell |
 | `E1402` | Sibling blocks have conflicting whole-row shift lanes |
 | `E1501` | Render context root is not a mapping |

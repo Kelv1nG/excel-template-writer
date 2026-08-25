@@ -154,6 +154,14 @@ Non-string cells bypass the text lexer and become literal typed cell parts.
 
 The engine does not call Python `eval`. Property lookup operates on mappings, private names beginning with `_` are forbidden, and arbitrary function or method calls are not in the grammar. This is both a security boundary and a language-stability boundary.
 
+Expression parsing is followed by semantic compilation. This pass resolves the allowlisted filter
+name, checks its literal argument contract, and lowers filters that need typed state. In particular,
+`date("yyyy-mm")` becomes a `DateFormatExpression` containing the value expression and an immutable
+format AST from [`date_formats.py`](../src/excel_template_writer/date_formats.py). That AST contains
+only date-field and literal-text nodes. Consequently, an invalid format fails before render data is
+evaluated, and neither the evaluator nor XLSX writer delegates language meaning to Python
+`strftime` or to `openpyxl`.
+
 ### Directive markers
 
 [`directives.py`](../src/excel_template_writer/directives.py) parses structural tags into typed marker objects:
@@ -213,9 +221,12 @@ The source-to-destination mapping lets a workbook writer copy presentation prope
 
 ### 1. Lex and parse every cell
 
-Every populated source cell becomes a `CellNode`. Literal text is retained, output expressions become expression AST nodes, and directive text becomes structural markers. Directive tags themselves are not retained as output content.
+Every populated source cell becomes a `CellNode`. Literal text is retained, output expressions
+become parsed and semantically compiled expression AST nodes, and directive text becomes structural
+markers. Directive tags themselves are not retained as output content.
 
-Compilation stops with diagnostics if any cell has an unterminated tag, invalid expression, unknown directive, or invalid marker position.
+Compilation stops with diagnostics if any cell has an unterminated tag, invalid expression, unknown
+or malformed filter, invalid date format, unknown directive, or invalid marker position.
 
 ### 2. Pair spatial markers
 
@@ -263,8 +274,15 @@ Each `ExpressionPart` is evaluated against the current lexical scope.
 
 - A cell containing one expression preserves its native value type.
 - A cell mixing literal text and expressions becomes text.
+- A compiled `date` filter deterministically returns text; an unfiltered native date remains typed.
 - A collection used directly as a scalar is an error.
 - A missing value is an error unless handled by `default` or by the special empty-repeat placeholder behavior.
+
+Filter input types are checked during evaluation because the same compiled workbook can be rendered
+with different contexts. For `date`, native dates and datetimes are accepted, while strings,
+numbers, and null are rejected with a filter-type diagnostic at the originating worksheet cell.
+Formatting a date has no spatial effect: its resulting string participates in ordinary cell text
+assembly and the existing text-length limit.
 
 ### Recursive block measurement
 
@@ -365,10 +383,11 @@ plan = rendering.require()
 
 Compilation produces no AST on error. Rendering produces no plan on error. A production workbook writer must be invoked only after a complete plan exists, so invalid templates cannot leave a partially rendered workbook presented as success.
 
-Current diagnostics cover lexical errors, invalid directives and expressions, unmatched or
-ambiguous markers, invalid geometry, partial overlap, invalid context values, missing data,
-scalar/collection type mistakes, row-shift conflicts, and destination collisions. Worksheet
-diagnostics carry sheet/cell locations; canonical-value diagnostics carry context paths.
+Current diagnostics cover lexical errors, invalid directives, expressions, filters and date
+formats, unmatched or ambiguous markers, invalid geometry, partial overlap, invalid context values,
+missing data, filter and scalar/collection type mistakes, row-shift conflicts, and destination
+collisions. Worksheet diagnostics carry sheet/cell locations; canonical-value diagnostics carry
+context paths.
 
 ## The XLSX boundary
 
@@ -400,7 +419,8 @@ the hosting platform.
 ## Current boundaries
 
 The executable system currently supports vertical repeats, explicit vertical isolation regions,
-row/cell shifts, scalar output, a small safe expression language, empty repeat placeholders,
+row/cell shifts, scalar output, a small safe expression language with deterministic date-to-text
+formatting, empty repeat placeholders,
 nested regions, stacked conditions, direct
 cell formatting, styled blanks, row/column properties, merged ranges, immutable context
 normalization, caller-supplied type adapters, deterministic resource limits, and XLSX package
