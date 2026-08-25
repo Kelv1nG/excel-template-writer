@@ -24,6 +24,7 @@ from excel_template_writer.diagnostics import (
 )
 from excel_template_writer.expressions import (
     ExpressionEvaluationError,
+    FilterTypeError,
     MissingValueError,
     evaluate_expression,
 )
@@ -262,6 +263,13 @@ class _Renderer:
                         part.span.location,
                     )
                     value = None
+            except FilterTypeError as error:
+                self.diagnostic(
+                    DiagnosticCode.FILTER_TYPE_MISMATCH,
+                    str(error),
+                    part.span.location,
+                )
+                value = None
             except ExpressionEvaluationError as error:
                 self.diagnostic(
                     DiagnosticCode.MISSING_VALUE,
@@ -307,6 +315,13 @@ class _Renderer:
         expression = node.iterable if isinstance(node, ForNode) else node.condition
         try:
             return evaluate_expression(expression, scope)
+        except FilterTypeError as error:
+            self.diagnostic(
+                DiagnosticCode.FILTER_TYPE_MISMATCH,
+                str(error),
+                node.span.location,
+            )
+            return _EVALUATION_FAILED
         except ExpressionEvaluationError as error:
             self.diagnostic(DiagnosticCode.MISSING_VALUE, str(error), node.span.location)
             return _EVALUATION_FAILED

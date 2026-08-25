@@ -201,3 +201,31 @@ def test_rejects_side_by_side_siblings_that_both_claim_row_insertion() -> None:
 
     assert result.compiled is None
     assert DiagnosticCode.OVERLAPPING_ROW_SHIFTS in {item.code for item in result.diagnostics}
+
+
+def test_reports_invalid_date_format_at_the_output_cell() -> None:
+    template = WorksheetTemplate.from_cells(
+        "Report",
+        {"C7": '{{ report_date | date("{yyyy}-{mm}") }}'},
+    )
+
+    result = compile_sheet(template)
+
+    assert result.compiled is None
+    assert [diagnostic.code for diagnostic in result.diagnostics] == [
+        DiagnosticCode.INVALID_DATE_FORMAT
+    ]
+    assert str(result.diagnostics[0].location) == "Report!C7:0"
+
+
+def test_reports_unknown_filter_at_the_output_cell() -> None:
+    template = WorksheetTemplate.from_cells(
+        "Report",
+        {"B3": "{{ value | invented }}"},
+    )
+
+    result = compile_sheet(template)
+
+    assert result.compiled is None
+    assert [diagnostic.code for diagnostic in result.diagnostics] == [DiagnosticCode.INVALID_FILTER]
+    assert str(result.diagnostics[0].location) == "Report!B3:0"

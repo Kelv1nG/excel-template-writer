@@ -233,6 +233,52 @@ def test_scalar_cell_keeps_excel_compatible_native_value() -> None:
     assert plan.cells[0].value is value
 
 
+def test_date_filter_formats_sole_and_mixed_expressions_as_text() -> None:
+    template = WorksheetTemplate.from_rows(
+        "Report",
+        [
+            ['{{ report_date | date("YYYY-mm") }}'],
+            ['For the month ending {{ report_date | date("dd mmmm yyyy") }}'],
+        ],
+    )
+    compiled = compile_sheet(template).require()
+
+    plan = render_sheet(compiled, {"report_date": date(2026, 8, 31)}).require()
+
+    assert _values_by_coordinate(plan) == {
+        "A1": "2026-08",
+        "A2": "For the month ending 31 August 2026",
+    }
+
+
+def test_date_filter_reports_null_as_a_type_mismatch_at_its_cell() -> None:
+    template = WorksheetTemplate.from_cells(
+        "Report",
+        {"D4": '{{ report_date | date("yyyy-mm") }}'},
+    )
+    compiled = compile_sheet(template).require()
+
+    result = render_sheet(compiled, {"report_date": None})
+
+    assert result.plan is None
+    assert [diagnostic.code for diagnostic in result.diagnostics] == [
+        DiagnosticCode.FILTER_TYPE_MISMATCH
+    ]
+    assert str(result.diagnostics[0].location) == "Report!D4:0"
+
+
+def test_date_filter_preserves_an_empty_repeat_placeholder() -> None:
+    template = WorksheetTemplate.from_rows(
+        "Report",
+        [['{% for row in rows %}{{ row.when | date("yyyy-mm") }}{% endfor %}']],
+    )
+    compiled = compile_sheet(template).require()
+
+    plan = render_sheet(compiled, {"rows": []}).require()
+
+    assert _values_by_coordinate(plan) == {"A1": None}
+
+
 def test_nested_repeats_are_evaluated_from_the_ast_scope_tree() -> None:
     template = WorksheetTemplate.from_rows(
         "Report",

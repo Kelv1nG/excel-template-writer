@@ -15,6 +15,7 @@ from excel_template_writer.ast import (
     RegionNode,
     StructuralNode,
 )
+from excel_template_writer.date_formats import DateFormatSyntaxError
 from excel_template_writer.diagnostics import (
     Diagnostic,
     DiagnosticCode,
@@ -33,7 +34,11 @@ from excel_template_writer.directives import (
     RegionDirective,
     parse_directive,
 )
-from excel_template_writer.expressions import ExpressionSyntaxError, parse_expression
+from excel_template_writer.expressions import (
+    ExpressionSyntaxError,
+    FilterValidationError,
+    compile_expression,
+)
 from excel_template_writer.model import Coordinate, Rectangle, WorksheetTemplate
 from excel_template_writer.syntax import (
     DirectiveToken,
@@ -616,7 +621,7 @@ def _compile_cell(
                 parts.append(LiteralPart(token.text))
         elif isinstance(token, OutputToken):
             try:
-                parts.append(ExpressionPart(parse_expression(token.source), token.span))
+                parts.append(ExpressionPart(compile_expression(token.source), token.span))
             except ExpressionSyntaxError as error:
                 diagnostics.append(
                     Diagnostic(
@@ -630,9 +635,43 @@ def _compile_cell(
                         ),
                     )
                 )
+            except FilterValidationError as error:
+                diagnostics.append(
+                    Diagnostic(
+                        DiagnosticCode.INVALID_FILTER,
+                        str(error),
+                        token.span.location,
+                    )
+                )
+            except DateFormatSyntaxError as error:
+                diagnostics.append(
+                    Diagnostic(
+                        DiagnosticCode.INVALID_DATE_FORMAT,
+                        str(error),
+                        token.span.location,
+                    )
+                )
         else:
             try:
                 directive = parse_directive(token.source)
+            except DateFormatSyntaxError as error:
+                diagnostics.append(
+                    Diagnostic(
+                        DiagnosticCode.INVALID_DATE_FORMAT,
+                        str(error),
+                        token.span.location,
+                    )
+                )
+                continue
+            except FilterValidationError as error:
+                diagnostics.append(
+                    Diagnostic(
+                        DiagnosticCode.INVALID_FILTER,
+                        str(error),
+                        token.span.location,
+                    )
+                )
+                continue
             except (DirectiveSyntaxError, ExpressionSyntaxError) as error:
                 diagnostics.append(
                     Diagnostic(

@@ -9,6 +9,13 @@ from dataclasses import dataclass
 from enum import Enum, auto
 from typing import Any
 
+from excel_template_writer.date_formats import (
+    DateFormat,
+    DateFormatValueError,
+    format_date,
+    parse_date_format,
+)
+
 
 class ExpressionSyntaxError(ValueError):
     def __init__(self, message: str, position: int = 0) -> None:
@@ -25,6 +32,14 @@ class ExpressionSyntaxError(ValueError):
 
 class ExpressionEvaluationError(ValueError):
     pass
+
+
+class FilterValidationError(ValueError):
+    """A parsed filter name or literal argument contract is invalid."""
+
+
+class FilterTypeError(ExpressionEvaluationError):
+    """A runtime value has the wrong canonical type for a compiled filter."""
 
 
 class MissingValueError(ExpressionEvaluationError):
@@ -85,6 +100,14 @@ class FilterExpression(Expression):
     value: Expression
     name: str
     arguments: tuple[Expression, ...]
+
+
+@dataclass(frozen=True)
+class DateFormatExpression(Expression):
+    """A date filter whose literal format has been compiled semantically."""
+
+    value: Expression
+    date_format: DateFormat
 
 
 class _TokenKind(Enum):
@@ -366,6 +389,120 @@ def parse_expression(source: str) -> Expression:
     return _Parser(source).parse()
 
 
+_FILTER_ARGUMENT_COUNTS: dict[str, frozenset[int]] = {
+    "default": frozenset({1}),
+    "string": frozenset({0}),
+    "upper": frozenset({0}),
+    "lower": frozenset({0}),
+    "join": frozenset({0, 1}),
+    "date": frozenset({1}),
+}
+
+
+def _validate_filter_arguments(
+    name: str,
+    arguments: tuple[Expression, ...],
+) -> None:
+    """Validate one built-in filter's name, count, and literal arguments.
+
+    Args:
+        name: Parsed filter identifier.
+        arguments: Recursively compiled argument expressions.
+
+    Raises:
+        FilterValidationError: If the filter contract is not satisfied.
+    """
+
+    if name not in _FILTER_ARGUMENT_COUNTS:
+        raise FilterValidationError(f"unknown filter: {name}")
+    allowed_counts = _FILTER_ARGUMENT_COUNTS[name]
+    if len(arguments) not in allowed_counts:
+        expected = (
+            str(next(iter(allowed_counts)))
+            if len(allowed_counts) == 1
+            else " or ".join(str(count) for count in sorted(allowed_counts))
+        )
+        raise FilterValidationError(
+            f"filter {name!r} expects {expected} argument(s); received {len(arguments)}"
+        )
+    if any(not isinstance(argument, LiteralExpression) for argument in arguments):
+        raise FilterValidationError(f"filter {name!r} arguments must be literals")
+    if name == "join" and arguments:
+        separator = arguments[0]
+        assert isinstance(separator, LiteralExpression)
+        if not isinstance(separator.value, str):
+            raise FilterValidationError("filter 'join' separator must be a string literal")
+
+
+def _compile_expression_tree(expression: Expression) -> Expression:
+    """Validate and lower filters within one parsed expression tree.
+
+    Args:
+        expression: Syntax-level expression produced by the parser.
+
+    Returns:
+        A semantically validated expression, including specialized filter nodes.
+
+    Raises:
+        FilterValidationError: If a filter name or argument contract is invalid.
+        DateFormatSyntaxError: If a date filter format cannot be compiled.
+        TypeError: If an unknown expression node reaches semantic compilation.
+    """
+
+    if isinstance(expression, (LiteralExpression, NameExpression)):
+        return expression
+    if isinstance(expression, AttributeExpression):
+        return AttributeExpression(_compile_expression_tree(expression.value), expression.name)
+    if isinstance(expression, IndexExpression):
+        return IndexExpression(
+            _compile_expression_tree(expression.value),
+            _compile_expression_tree(expression.index),
+        )
+    if isinstance(expression, UnaryExpression):
+        return UnaryExpression(expression.operator, _compile_expression_tree(expression.operand))
+    if isinstance(expression, BinaryExpression):
+        return BinaryExpression(
+            _compile_expression_tree(expression.left),
+            expression.operator,
+            _compile_expression_tree(expression.right),
+        )
+    if isinstance(expression, FilterExpression):
+        value = _compile_expression_tree(expression.value)
+        arguments = tuple(_compile_expression_tree(item) for item in expression.arguments)
+        _validate_filter_arguments(expression.name, arguments)
+        if expression.name == "date":
+            format_value = arguments[0]
+            assert isinstance(format_value, LiteralExpression)
+            if not isinstance(format_value.value, str):
+                raise FilterValidationError("filter 'date' format must be a string literal")
+            return DateFormatExpression(value, parse_date_format(format_value.value))
+        return FilterExpression(value, expression.name, arguments)
+    if isinstance(expression, DateFormatExpression):
+        return DateFormatExpression(
+            _compile_expression_tree(expression.value),
+            expression.date_format,
+        )
+    raise TypeError(f"unsupported expression node: {type(expression).__name__}")
+
+
+def compile_expression(source: str) -> Expression:
+    """Parse, validate, and lower one safe template expression.
+
+    Args:
+        source: Expression text without ``{{`` or ``}}`` delimiters.
+
+    Returns:
+        A semantically compiled expression AST ready for evaluation.
+
+    Raises:
+        ExpressionSyntaxError: If the expression grammar is invalid.
+        FilterValidationError: If a filter invocation is invalid.
+        DateFormatSyntaxError: If a date format is invalid.
+    """
+
+    return _compile_expression_tree(parse_expression(source))
+
+
 def _root_path(expression: Expression) -> tuple[str, str]:
     """Describe the root context name and display path of an access chain.
 
@@ -446,6 +583,12 @@ def _evaluate(expression: Expression, scope: Mapping[str, Any]) -> Any:
             ">": lambda: left > right,
             ">=": lambda: left >= right,
         }[expression.operator]()
+    if isinstance(expression, DateFormatExpression):
+        value = _evaluate(expression.value, scope)
+        try:
+            return format_date(value, expression.date_format)
+        except DateFormatValueError as error:
+            raise FilterTypeError(str(error)) from error
     if isinstance(expression, FilterExpression):
         try:
             value = _evaluate(expression.value, scope)

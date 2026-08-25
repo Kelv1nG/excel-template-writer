@@ -6,7 +6,7 @@ import ast as python_ast
 import re
 from dataclasses import dataclass
 
-from excel_template_writer.expressions import Expression, parse_expression
+from excel_template_writer.expressions import Expression, compile_expression
 
 
 class DirectiveSyntaxError(ValueError):
@@ -168,7 +168,7 @@ def _parse_for(source: str) -> ForDirective:
     option_start = _find_option_start(remainder)
     expression_source = remainder if option_start is None else remainder[:option_start]
     option_source = "" if option_start is None else remainder[option_start:]
-    iterable = parse_expression(expression_source.strip())
+    iterable = compile_expression(expression_source.strip())
     direction, shift = _validate_layout_options(_parse_options(option_source, owner="loop"))
     return ForDirective(variable, iterable, direction, shift)
 
@@ -210,7 +210,7 @@ def parse_directive(source: str) -> Directive:
     if normalized == "endfor":
         return EndForDirective()
     if normalized.startswith("if "):
-        return IfDirective(parse_expression(normalized[3:].strip()))
+        return IfDirective(compile_expression(normalized[3:].strip()))
     if normalized == "else":
         return ElseDirective()
     if normalized == "endif":

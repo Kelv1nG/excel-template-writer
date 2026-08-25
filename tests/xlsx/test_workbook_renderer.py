@@ -250,6 +250,39 @@ def test_render_workbook_preserves_native_value_types(tmp_path: Path) -> None:
         rendered.close()
 
 
+def test_date_filter_writes_text_while_unfiltered_date_remains_native(tmp_path: Path) -> None:
+    template_path = tmp_path / "date-filter.xlsx"
+    output_path = tmp_path / "date-filter-output.xlsx"
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet["A1"] = "{{ report_date }}"
+    sheet["A1"].number_format = '"For the month ending "dd mmmm yyyy'
+    sheet["B1"] = '{{ report_date | date("YYYY-mm") }}'
+    sheet["B1"].number_format = "yyyy-mm-dd"
+    sheet["C1"] = 'For the month ending {{ report_date | date("dd mmmm yyyy") }}'
+    _save(workbook, template_path)
+
+    render_workbook(
+        template_path,
+        output_path,
+        {"report_date": date(2026, 8, 31)},
+    )
+
+    rendered = load_workbook(output_path)
+    try:
+        sheet = rendered.active
+        assert isinstance(sheet["A1"].value, (date, datetime))
+        assert sheet["A1"].data_type == "d"
+        assert sheet["A1"].number_format == '"For the month ending "dd mmmm yyyy'
+        assert sheet["B1"].value == "2026-08"
+        assert sheet["B1"].data_type == "s"
+        assert sheet["B1"].number_format == "yyyy-mm-dd"
+        assert sheet["C1"].value == "For the month ending 31 August 2026"
+        assert sheet["C1"].data_type == "s"
+    finally:
+        rendered.close()
+
+
 def test_repeats_blank_cells_that_carry_formatting(tmp_path: Path) -> None:
     template_path = tmp_path / "styled-blanks.xlsx"
     output_path = tmp_path / "styled-blanks-output.xlsx"
