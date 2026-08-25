@@ -420,21 +420,65 @@ Prohibited:
 
 The engine owns an expression AST and evaluator. Using a third-party parser internally is acceptable, but public semantics cannot depend accidentally on Python evaluation behavior.
 
-## 11. Proposed built-in filters
+## 11. Built-in filters
 
-The first set should remain small:
+The executable set remains small:
 
 - `default(value)`
 - `string`
 - `upper`
 - `lower`
 - `date(format)`
-- `datetime(format)`
-- `number(format)`
-- `money(format_or_currency)`
 - `join(separator)`
 
-Some apparent formatting filters may instead set Excel number formats while retaining numeric cell values. The filter specification must say whether a filter changes the value, the cell format, or both.
+Filter names and argument contracts are validated during compilation. Filter arguments are literals;
+runtime expressions cannot dynamically select formatting rules. Unknown filters, invalid argument
+counts, and arguments of the wrong literal type are template errors rather than deferred guesses.
+
+### 11.1 Date text formatting
+
+`date(format)` is a text-formatting filter for the cases where a date must be embedded in literal
+cell content:
+
+```text
+For the month ending {{ report_date | date("dd mmmm yyyy") }}
+{{ report_date | date("yyyy-mm") }}
+```
+
+The filter requires exactly one string-literal format argument. It accepts canonical `date` and
+`datetime` values and always returns text. A `datetime` contributes its calendar-date fields; its
+time portion is not rendered. Strings are not parsed as dates, numbers are not interpreted as Excel
+date serials, and `null` is a type error. A missing input remains a missing-value error.
+
+The date format is a case-insensitive, deliberately constrained subset of Excel date-format codes:
+
+| Code | Meaning |
+| --- | --- |
+| `yyyy`, `yy` | Four- or two-digit year |
+| `mmmm`, `mmm` | Full or abbreviated English month name |
+| `mm`, `m` | Zero-padded or unpadded month number |
+| `dddd`, `ddd` | Full or abbreviated English weekday name |
+| `dd`, `d` | Zero-padded or unpadded day of month |
+
+Spaces and ordinary punctuation are literal. Double-quoted sections and a backslash-escaped next
+character introduce explicit literal text within the format. Empty formats, unsupported field
+letters or field widths, unterminated quoted sections, dangling escapes, braces, Python
+`strftime` percent codes, Excel multi-section formats, colors, conditions, and spacing/fill codes
+are compilation errors. Month and weekday names are deterministic English text in this release;
+locale selection is deferred to a separate language design.
+
+The format is parsed into an engine-owned immutable format AST during expression compilation. It is
+not passed through to Python `strftime` or interpreted by the XLSX writer. Date formatting does not
+change geometry, scope, shifting, or block measurement beyond contributing its final text length.
+
+Because `date(format)` returns text, even a sole filtered expression produces an Excel text cell and
+the source cell's number format has no effect on its display. To retain an actual Excel date, authors
+use an unfiltered sole expression such as `{{ report_date }}` and set the desired number format on
+the template cell. The template cell remains authoritative for native Excel presentation.
+
+The `datetime`, `number`, and `money` filters remain proposed. Their value-versus-presentation
+semantics must be resolved independently before implementation; the behavior of `date` must not be
+silently generalized to them.
 
 ## 12. Formulas
 
@@ -658,10 +702,13 @@ Each diagnostic includes:
 Examples:
 
 - `E1001 UNTERMINATED_EXPRESSION`
+- `E1104 INVALID_FILTER`
+- `E1105 INVALID_DATE_FORMAT`
 - `E1203 AMBIGUOUS_BLOCK_PAIRING`
 - `E1205 PARTIAL_BLOCK_OVERLAP`
 - `E1301 MISSING_VALUE`
 - `E1302 COLLECTION_IN_SCALAR_CELL`
+- `E1304 FILTER_TYPE_MISMATCH`
 - `E1401 LAYOUT_COLLISION`
 - `E1402 OVERLAPPING_ROW_SHIFTS`
 - `E2104 MERGE_CROSSES_BLOCK_BOUNDARY`
