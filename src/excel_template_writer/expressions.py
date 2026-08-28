@@ -6,6 +6,7 @@ import ast as python_ast
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from decimal import Decimal
 from enum import Enum, auto
 from typing import Any
 
@@ -396,6 +397,7 @@ _FILTER_ARGUMENT_COUNTS: dict[str, frozenset[int]] = {
     "lower": frozenset({0}),
     "join": frozenset({0, 1}),
     "date": frozenset({1}),
+    "sum": frozenset({0, 1}),
 }
 
 
@@ -432,6 +434,13 @@ def _validate_filter_arguments(
         assert isinstance(separator, LiteralExpression)
         if not isinstance(separator.value, str):
             raise FilterValidationError("filter 'join' separator must be a string literal")
+    if name == "sum" and arguments:
+        column = arguments[0]
+        assert isinstance(column, LiteralExpression)
+        if not isinstance(column.value, str):
+            raise FilterValidationError("filter 'sum' column must be a string literal")
+        if column.value.startswith("_"):
+            raise FilterValidationError("filter 'sum' column must not begin with '_'")
 
 
 def _compile_expression_tree(expression: Expression) -> Expression:
@@ -524,6 +533,100 @@ def _root_path(expression: Expression) -> tuple[str, str]:
     return "<expression>", "<expression>"
 
 
+def _column_value_path(collection_path: str, index: int, column: str) -> str:
+    """Describe one selected record value within a collection expression.
+
+    Args:
+        collection_path: Display path of the collection being reduced.
+        index: Zero-based collection item index.
+        column: Literal top-level record key selected by the filter.
+
+    Returns:
+        A readable path containing the collection index and selected key.
+    """
+
+    item_path = f"{collection_path}[{index}]"
+    if re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", column):
+        return f"{item_path}.{column}"
+    return f"{item_path}[{column!r}]"
+
+
+def _evaluate_sum_filter(
+    value: Any,
+    column: str | None,
+    collection_expression: Expression,
+) -> int | float | Decimal:
+    """Reduce an ordered numeric collection or one numeric record column.
+
+    Args:
+        value: Evaluated input supplied to the ``sum`` filter.
+        column: Optional literal top-level record key to select from every item.
+        collection_expression: Input expression used to describe failing value paths.
+
+    Returns:
+        The canonical numeric total, or integer zero when no numbers are selected.
+
+    Raises:
+        FilterTypeError: If the input shape or selected values violate the filter contract.
+        MissingValueError: If a selected record does not contain ``column``.
+    """
+
+    if not isinstance(value, (list, tuple)):
+        raise FilterTypeError(
+            f"filter 'sum' requires an ordered collection; received {type(value).__name__}"
+        )
+
+    root, collection_path = _root_path(collection_expression)
+    total: int | float | Decimal = 0
+    contains_float = False
+    contains_decimal = False
+    for index, item in enumerate(value):
+        selected = item
+        selected_path = f"{collection_path}[{index}]"
+        if column is not None:
+            selected_path = _column_value_path(collection_path, index, column)
+            if not isinstance(item, Mapping):
+                raise FilterTypeError(
+                    f"filter 'sum' with column {column!r} requires record items; "
+                    f"{collection_path}[{index}] is {type(item).__name__}"
+                )
+            if column not in item:
+                raise MissingValueError(root, selected_path)
+            selected = item[column]
+
+        if selected is None:
+            continue
+        if isinstance(selected, bool) or not isinstance(selected, (int, float, Decimal)):
+            raise FilterTypeError(
+                "filter 'sum' requires numeric values; "
+                f"{selected_path} is {type(selected).__name__}"
+            )
+        if isinstance(selected, Decimal):
+            if contains_float:
+                raise FilterTypeError(
+                    "filter 'sum' cannot mix floating-point and decimal values; "
+                    f"conflict at {selected_path}"
+                )
+            if not contains_decimal:
+                total = Decimal(total)
+                contains_decimal = True
+            total += selected
+            continue
+        if isinstance(selected, float):
+            if contains_decimal:
+                raise FilterTypeError(
+                    "filter 'sum' cannot mix floating-point and decimal values; "
+                    f"conflict at {selected_path}"
+                )
+            if not contains_float:
+                total = float(total)
+                contains_float = True
+            total += selected
+            continue
+        total += selected
+    return total
+
+
 def _evaluate(expression: Expression, scope: Mapping[str, Any]) -> Any:
     """Evaluate one expression node against a canonical lexical scope.
 
@@ -608,6 +711,10 @@ def _evaluate(expression: Expression, scope: Mapping[str, Any]) -> Any:
         if expression.name == "join":
             separator = str(arguments[0]) if arguments else ", "
             return separator.join(str(item) for item in value)
+        if expression.name == "sum":
+            column = arguments[0] if arguments else None
+            assert column is None or isinstance(column, str)
+            return _evaluate_sum_filter(value, column, expression.value)
         raise ExpressionEvaluationError(f"unknown filter: {expression.name}")
     raise TypeError(f"unsupported expression node: {type(expression).__name__}")
 

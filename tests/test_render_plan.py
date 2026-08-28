@@ -279,6 +279,54 @@ def test_date_filter_preserves_an_empty_repeat_placeholder() -> None:
     assert _values_by_coordinate(plan) == {"A1": None}
 
 
+def test_sum_filter_produces_scalar_totals_without_layout_changes() -> None:
+    template = WorksheetTemplate.from_rows(
+        "Report",
+        [["{{ amounts | sum }}", '{{ rows | sum("amount") }}']],
+    )
+    compiled = compile_sheet(template).require()
+
+    plan = render_sheet(
+        compiled,
+        {
+            "amounts": [1, None, 2.5],
+            "rows": [{"amount": 10}, {"amount": None}, {"amount": 5}],
+        },
+    ).require()
+
+    assert _values_by_coordinate(plan) == {"A1": 3.5, "B1": 15}
+
+
+def test_sum_filter_reports_missing_columns_and_type_mismatches_at_the_output_cell() -> None:
+    missing_template = WorksheetTemplate.from_cells(
+        "Report",
+        {"D4": '{{ rows | sum("amount") }}'},
+    )
+    invalid_template = WorksheetTemplate.from_cells(
+        "Report",
+        {"E5": "{{ values | sum }}"},
+    )
+
+    missing_result = render_sheet(
+        compile_sheet(missing_template).require(),
+        {"rows": [{"amount": 1}, {}]},
+    )
+    invalid_result = render_sheet(
+        compile_sheet(invalid_template).require(),
+        {"values": [1, True]},
+    )
+
+    assert [diagnostic.code for diagnostic in missing_result.diagnostics] == [
+        DiagnosticCode.MISSING_VALUE
+    ]
+    assert "rows[1].amount" in missing_result.diagnostics[0].message
+    assert str(missing_result.diagnostics[0].location) == "Report!D4:0"
+    assert [diagnostic.code for diagnostic in invalid_result.diagnostics] == [
+        DiagnosticCode.FILTER_TYPE_MISMATCH
+    ]
+    assert str(invalid_result.diagnostics[0].location) == "Report!E5:0"
+
+
 def test_nested_repeats_are_evaluated_from_the_ast_scope_tree() -> None:
     template = WorksheetTemplate.from_rows(
         "Report",

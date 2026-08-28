@@ -377,7 +377,8 @@ particular template, before evaluation begins.
 - A sole expression preserves its canonical scalar type.
 - Mixed literal and expression content is converted to text.
 - `null` produces a blank cell by default.
-- A collection or mapping used as a scalar is a type error unless passed through a registered formatting filter.
+- A collection or mapping used as a scalar is a type error unless passed through a registered
+  filter that produces a scalar.
 - A `for` expression requires an ordered collection; it does not iterate record keys.
 - The core language has no sorting operation in the first release. The platform prepares final order.
 
@@ -430,6 +431,7 @@ The executable set remains small:
 - `lower`
 - `date(format)`
 - `join(separator)`
+- `sum` and `sum(column)`
 
 Filter names and argument contracts are validated during compilation. Filter arguments are literals;
 runtime expressions cannot dynamically select formatting rules. Unknown filters, invalid argument
@@ -479,6 +481,38 @@ the template cell. The template cell remains authoritative for native Excel pres
 The `datetime`, `number`, and `money` filters remain proposed. Their value-versus-presentation
 semantics must be resolved independently before implementation; the behavior of `date` must not be
 silently generalized to them.
+
+### 11.2 Numeric summation
+
+The `sum` filter reduces an ordered collection to one canonical numeric scalar. Without an
+argument, each collection item is a candidate numeric value:
+
+```text
+{{ amounts | sum }}
+```
+
+With one string-literal argument, each collection item must be a record and the argument identifies
+one top-level record key to aggregate:
+
+```text
+{{ lines | sum("amount") }}
+```
+
+The column argument is a literal key, not an expression or dotted path. It may not begin with `_`.
+A missing key is a missing-value error that identifies the failing collection index and key. A
+non-record collection item in column mode, a boolean, or any non-numeric selected value is a filter
+type error. Strings are never coerced to numbers.
+
+Present `null` values are ignored. An empty collection, or a collection containing only `null`
+selected values, returns the integer `0`. A result containing only integers remains an integer;
+integers may be combined with either finite floats or finite decimals, producing that wider numeric
+type. Mixing a float and a decimal in one sum is a filter type error rather than an implicit lossy
+conversion.
+
+Summation preserves input order, performs no sorting, grouping, filtering, or reconciliation, and
+does not mutate the canonical context. It produces one scalar, so it has no effect on lexical scope,
+rectangular geometry, layout measurement, shifting, or workbook-writer behavior. Its traversal is
+bounded by the collection limits already enforced during context normalization.
 
 ## 12. Formulas
 
@@ -843,7 +877,7 @@ Phase 0 accepts a two-dimensional in-memory worksheet representation and produce
 
 - `.xlsx` load/save
 - scalar expressions and types
-- formatting filters
+- formatting and scalar-reduction filters
 - template validation
 - output integrity reload
 

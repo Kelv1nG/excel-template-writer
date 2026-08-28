@@ -283,6 +283,37 @@ def test_date_filter_writes_text_while_unfiltered_date_remains_native(tmp_path: 
         rendered.close()
 
 
+def test_sum_filter_writes_typed_numeric_totals_with_template_formatting(tmp_path: Path) -> None:
+    template_path = tmp_path / "sum-filter.xlsx"
+    output_path = tmp_path / "sum-filter-output.xlsx"
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet["A1"] = "{{ amounts | sum }}"
+    sheet["B1"] = '{{ rows | sum("amount") }}'
+    sheet["B1"].number_format = "$#,##0.00"
+    _save(workbook, template_path)
+
+    render_workbook(
+        template_path,
+        output_path,
+        {
+            "amounts": [1, None, 2.5],
+            "rows": [{"amount": Decimal("12.50")}, {"amount": 2}, {"amount": None}],
+        },
+    )
+
+    rendered = load_workbook(output_path)
+    try:
+        sheet = rendered.active
+        assert sheet["A1"].value == 3.5
+        assert sheet["A1"].data_type == "n"
+        assert sheet["B1"].value == 14.5
+        assert sheet["B1"].data_type == "n"
+        assert sheet["B1"].number_format == "$#,##0.00"
+    finally:
+        rendered.close()
+
+
 def test_repeats_blank_cells_that_carry_formatting(tmp_path: Path) -> None:
     template_path = tmp_path / "styled-blanks.xlsx"
     output_path = tmp_path / "styled-blanks-output.xlsx"
