@@ -23,7 +23,7 @@ TEMPLATE_PATH, OUTPUT_PATH = sample_paths("scalar_values")
 
 
 def build_template(path: Path = TEMPLATE_PATH) -> Path:
-    """Build a template demonstrating typed cells, mixed text, and filters.
+    """Build a template demonstrating typed cells, mixed text, and scalar filters.
 
     Args:
         path: Destination path for the authored template workbook.
@@ -62,6 +62,12 @@ def build_template(path: Path = TEMPLATE_PATH) -> Path:
         ("Mixed text", "Invoice {{ invoice.number }}", "always text"),
         ("Upper filter", "{{ customer.name | upper }}", "uppercase text"),
         ("Join filter", '{{ labels | join(" / ") }}', "one text value"),
+        ("Numeric sum", "{{ amounts | sum }}", "nulls skipped; native number: 25"),
+        (
+            "Record-column sum",
+            '{{ lines | sum("amount") }}',
+            "literal column key; native number: 150",
+        ),
         ("Default filter", '{{ missing | default("not supplied") }}', "explicit fallback"),
     )
     for row_number, values in enumerate(rows, start=5):
@@ -72,6 +78,7 @@ def build_template(path: Path = TEMPLATE_PATH) -> Path:
         )
     sheet["B7"].number_format = '$#,##0.00;[Red]-$#,##0.00;"-"'
     sheet["B8"].number_format = "yyyy-mm-dd"
+    sheet["B16"].number_format = '$#,##0.00;[Red]-$#,##0.00;"-"'
     result = atomic_save(workbook, path)
     workbook.close()
     return result
@@ -104,6 +111,8 @@ def render_sample(
                 "approved": True,
             },
             "labels": ["priority", "renewal"],
+            "amounts": [10, None, 15],
+            "lines": [{"amount": 100}, {"amount": None}, {"amount": 50}],
         },
     )
     assert_no_template_tags(output_path)
@@ -120,7 +129,12 @@ def render_sample(
         assert sheet["B10"].data_type == "s"
         assert sheet["B11"].value is True
         assert sheet["B12"].value == "Invoice INV-1042"
-        assert sheet["B15"].value == "not supplied"
+        assert sheet["B15"].value == 25
+        assert sheet["B15"].data_type == "n"
+        assert sheet["B16"].value == 150
+        assert sheet["B16"].data_type == "n"
+        assert sheet["B16"].number_format == '$#,##0.00;[Red]-$#,##0.00;"-"'
+        assert sheet["B17"].value == "not supplied"
     finally:
         workbook.close()
     return output_path
