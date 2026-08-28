@@ -162,6 +162,7 @@ Private names or keys beginning with `_`, imports, assignment, comprehensions, l
 | `lower` | Convert to lowercase text. | `customer.name \| lower` |
 | `join(separator)` | Join collection items as text. The default separator is `", "`. | `labels \| join(" / ")` |
 | `date(format)` | Format a native date or datetime as deterministic text. | `report_date \| date("dd mmmm yyyy")` |
+| `sum` | Add numeric collection items, or add one numeric record column named by a literal argument. | `lines \| sum("amount")` |
 
 Filter names, argument counts, and literal argument types are checked while compiling the template.
 Unknown filters and dynamic arguments such as `date(format_variable)` are errors. The filters
@@ -212,6 +213,30 @@ native Excel date, keep the expression unfiltered and format the placeholder cel
 
 For example, the Excel custom number format `"For the month ending "dd mmmm yyyy` displays a full
 label while preserving the underlying date value.
+
+#### `sum` and `sum(column)`
+
+Use `sum` without an argument to add an ordered collection of numbers:
+
+```text
+{{ amounts | sum }}
+```
+
+Pass one literal column name to add that top-level key from every record in a table-shaped
+collection:
+
+```text
+{{ lines | sum("amount") }}
+```
+
+The column name is a literal key, not a dotted path or dynamic expression. Every collection item
+must be a record containing that key. A missing key reports `E1301`; a non-record item, boolean,
+string, or other non-numeric selected value reports `E1304`. Numeric strings are not converted.
+
+Present `null` values are skipped. Empty and all-null inputs return the integer `0`. Integers may be
+combined with floats or decimals, but floats and decimals cannot appear in the same sum because the
+engine will not choose a lossy conversion. The result remains a numeric cell, so Excel formatting
+comes from the template cell as usual.
 
 ## `for` and `endfor`
 

@@ -275,6 +275,8 @@ Each `ExpressionPart` is evaluated against the current lexical scope.
 - A cell containing one expression preserves its native value type.
 - A cell mixing literal text and expressions becomes text.
 - A compiled `date` filter deterministically returns text; an unfiltered native date remains typed.
+- A `sum` filter reduces a numeric collection, or one literal key from a collection of records, to
+  one typed numeric scalar.
 - A collection used directly as a scalar is an error.
 - A missing value is an error unless handled by `default` or by the special empty-repeat placeholder behavior.
 
@@ -283,6 +285,11 @@ with different contexts. For `date`, native dates and datetimes are accepted, wh
 numbers, and null are rejected with a filter-type diagnostic at the originating worksheet cell.
 Formatting a date has no spatial effect: its resulting string participates in ordinary cell text
 assembly and the existing text-length limit.
+
+`sum` accepts zero or one compile-time literal argument. It skips present nulls, rejects booleans
+and other non-numeric values, and reports a missing selected record key separately from a type
+mismatch. The reduction traverses the already-normalized finite collection and returns one scalar,
+so it introduces no layout, scope, or workbook-writer behavior.
 
 ### Recursive block measurement
 
@@ -420,7 +427,7 @@ the hosting platform.
 
 The executable system currently supports vertical repeats, explicit vertical isolation regions,
 row/cell shifts, scalar output, a small safe expression language with deterministic date-to-text
-formatting, empty repeat placeholders,
+formatting and numeric summation, empty repeat placeholders,
 nested regions, stacked conditions, direct
 cell formatting, styled blanks, row/column properties, merged ranges, immutable context
 normalization, caller-supplied type adapters, deterministic resource limits, and XLSX package

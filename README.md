@@ -30,14 +30,14 @@ template = WorksheetTemplate.from_rows(
     [
         ["Description", "Amount"],
         ["{% for row in rows %}{{ row.name }}", "{{ row.amount }}{% endfor %}"],
-        ["Total", "{{ total }}"],
+        ["Total", '{{ rows | sum("amount") }}'],
     ],
 )
 
 compiled = compile_sheet(template).require()
 plan = render_sheet(
     compiled,
-    {"rows": [{"name": "Service", "amount": 125}], "total": 125},
+    {"rows": [{"name": "Service", "amount": 125}]},
 ).require()
 ```
 
