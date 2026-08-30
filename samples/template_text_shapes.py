@@ -295,6 +295,37 @@ def _drawing_state(path: Path, part: str) -> list[tuple[int, int, str, str]]:
     return result
 
 
+def _worksheet_drawing_target(path: Path, sheet_index: int) -> str:
+    """Resolve one worksheet's drawing relationship target.
+
+    Args:
+        path: XLSX package containing the worksheet and relationships.
+        sheet_index: One-based worksheet package index.
+
+    Returns:
+        Package-relative target selected by the worksheet's drawing element.
+    """
+
+    worksheet_part = f"xl/worksheets/sheet{sheet_index}.xml"
+    relationships_part = f"xl/worksheets/_rels/sheet{sheet_index}.xml.rels"
+    with ZipFile(path) as archive:
+        worksheet = ElementTree.fromstring(archive.read(worksheet_part))
+        relationships = ElementTree.fromstring(archive.read(relationships_part))
+    drawing = worksheet.find(_qn(_SHEET, "drawing"))
+    assert drawing is not None
+    relationship_id = drawing.get(_qn(_R, "id"))
+    matches = [
+        relationship
+        for relationship in relationships
+        if relationship.get("Id") == relationship_id
+        and relationship.get("Type") == _DRAWING_RELATIONSHIP
+    ]
+    assert len(matches) == 1
+    target = matches[0].get("Target")
+    assert target is not None
+    return target.lstrip("/")
+
+
 def build_template(path: Path = TEMPLATE_PATH) -> Path:
     """Build whole-row and cell-lane templates with editable text shapes.
 
@@ -428,6 +459,8 @@ def render_sample(
         (26, 0, "rightArrow", "Inside A:C lane"),
         (15, 4, "roundRect", "Outside lane"),
     ]
+    assert _worksheet_drawing_target(output_path, 1) == "xl/drawings/drawing1.xml"
+    assert _worksheet_drawing_target(output_path, 2) == "xl/drawings/drawing2.xml"
     assert_no_template_tags(output_path)
     return output_path
 
