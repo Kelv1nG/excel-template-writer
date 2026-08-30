@@ -51,6 +51,7 @@ The language is declarative and Jinja-like, but its execution model is spatial. 
 - Pivot tables, pivot charts, slicers, macros, form controls, and unsupported drawing objects
 - Creating charts, resizing chart data ranges, or resizing and repeating chart anchors
 - Creating images from render data, repeating images, or resizing image anchors
+- Creating shapes, evaluating shape text, repeating shapes, or resizing shape anchors
 - A complete implementation of Jinja2
 - Automatic inference of repeat regions from blank cells, formatting, or worksheet used ranges
 - Automatic matching between displayed headers and input field names
@@ -239,7 +240,8 @@ Each AST node first reports its measured output size. Parent nodes then allocate
 
 The transformation is used consistently for cells, merges, row heights, column widths, and
 supported workbook objects whose individual feature contract requires coordinate transformation.
-Template-authored charts and images use the planned-anchor policies in sections 13.5 and 13.6.
+Template-authored charts, images, and static text shapes use the planned-anchor policies in
+sections 13.5, 13.6, and 13.7.
 
 ## 9. Data and type system
 
@@ -596,10 +598,10 @@ structural layout transformation. If a repeat or condition could require a range
 resize, contract, or split, rendering is rejected until that feature has its own validated render
 plan representation.
 
-The same safety rule applies to other coordinate-dependent workbook objects. Native Excel Tables,
-shapes, and unsupported drawing objects or anchors are rejected by the first production adapter.
-The narrow template-authored chart and embedded-image profiles in sections 13.5 and 13.6 are the
-only supported drawing exceptions.
+The same safety rule applies to other coordinate-dependent workbook objects. Native Excel Tables
+and unsupported drawing objects or anchors are rejected by the first production adapter. The
+narrow template-authored chart, embedded-image, and static text-shape profiles in sections 13.5,
+13.6, and 13.7 are the only supported drawing exceptions.
 Hyperlinks and comments are preserved only when their cell has exactly one unchanged destination;
 copying or moving them is rejected until an explicit policy is implemented.
 
@@ -639,9 +641,10 @@ anchor remains outside the lane.
 Chart style, axes, legend, titles, labels, blank-cell policy, and other state representable by the
 supported `openpyxl` chart object are preserved through save and reload. Chart value caches are not
 calculated by the renderer; consumers render the chart from its fixed worksheet references. A
-worksheet drawing part containing a shape, connector, unsupported graphic frame, or another
-unsupported drawing object is rejected rather than partially preserved. Supported pictures may
-share an ordered drawing part with supported charts under section 13.6.
+worksheet drawing part containing a connector, a shape outside the static profile in section 13.7,
+an unsupported graphic frame, or another unsupported drawing object is rejected rather than
+partially preserved. Supported pictures and static text shapes may share an ordered drawing part
+with supported charts.
 
 ### 13.6 Template-authored worksheet images
 
@@ -649,8 +652,8 @@ The first image profile preserves embedded pictures already authored on an ordin
 Rendering does not create pictures from context data, read filenames or URLs from expressions, or
 repeat one picture for every block instance. PNG and JPEG media embedded inside the XLSX package
 are supported. Linked or external pictures, SVG, GIF, BMP, TIFF, WMF, EMF, worksheet backgrounds,
-header/footer pictures, shapes, grouped drawings, and data-driven image directives are rejected or
-remain outside this profile.
+header/footer pictures, grouped drawings, and data-driven image directives are rejected or remain
+outside this profile. Static text shapes are governed separately by section 13.7.
 
 Image movement follows the same completed source-to-destination mapping used for chart anchors. An
 absolute anchor remains at its authored position. A one-cell anchor moves its marker to that source
@@ -671,6 +674,36 @@ supported charts and pictures in each worksheet drawing so their stacking order 
 regrouped by object type or anchor type. Extra drawing relationships such as picture hyperlinks,
 alternate vector representations, or other unsupported effects cause explicit rejection rather
 than partial preservation.
+
+### 13.7 Template-authored static text shapes
+
+The first text-shape profile preserves ordinary ungrouped DrawingML shapes that contain authored
+text, including text boxes and text-bearing decorative presets such as rectangles, rounded
+rectangles, arrows, and callouts. The shape remains an editable Excel object. The adapter preserves
+its authored rich-text runs, paragraphs, fills, outlines, geometry, rotation, margins, wrapping,
+autofit or overflow settings, locks, print flags, name, description, and other inline DrawingML
+state rather than converting it to cells or an image.
+
+Shape text is opaque template content in this profile. Text such as `{{ customer.name }}` or
+`{% for item in items %}` inside a shape is preserved literally and is not lexed, evaluated, or
+used to define a block. Rendering never changes the text or measures it, and it does not resize a
+shape to fit rendered workbook content. The shape's existing Excel wrap, autofit, clipping, and
+overflow behavior remains authoritative.
+
+Movement follows the same completed source-to-destination mapping used for chart and image
+anchors. An absolute anchor remains at its authored position. A one-cell anchor moves its marker
+to that source cell's sole planned destination while retaining its offsets and physical extent. A
+two-cell anchor may translate only when both markers have exactly one destination and both receive
+the same row and column delta. Different marker deltas would resize the shape and are rejected.
+Markers removed or copied by structural rendering are also rejected; shapes are never repeated.
+For `shift="cells"`, marker coordinates determine lane membership, not the shape's visible bounds.
+
+Supported shapes may share one drawing part with supported charts and pictures. Their source
+stacking order is preserved. Every supported shape must be a relationship-free `xdr:sp` with a
+normal text body. Grouped shapes, connectors, WordArt or text-warp shapes, dynamic text fields,
+cell-linked text, macros, shape hyperlinks, image-filled shapes, linked or external content,
+SmartArt, form controls, OLE objects, and legacy VML drawings are outside this profile and cause
+explicit rejection rather than partial preservation.
 
 ## 14. Conditions and advanced constructs
 
@@ -715,7 +748,7 @@ Loads the source workbook into an immutable template model containing:
 - style references
 - row and column properties
 - merged ranges
-- supported template-authored charts and their planned anchors
+- supported template-authored charts, images, and static text shapes with their planned anchors
 - supported workbook metadata
 
 The reader is the only layer directly coupled to `openpyxl` input objects.
@@ -925,8 +958,8 @@ Most layout tests should operate without `openpyxl`.
 ### 19.3 Workbook integration tests
 
 Fixture workbooks verify values, types, style IDs/semantics, dimensions, merges, formula
-rejection/preservation boundaries, fixed chart references, planned chart/image anchors, embedded
-media bytes and drawing order, and package integrity after
+rejection/preservation boundaries, fixed chart references, planned chart/image/text-shape anchors,
+static rich shape text, embedded media bytes and drawing order, and package integrity after
 save/reload.
 
 Where workbook XML affects correctness, tests may inspect selected OOXML parts. XML manipulation is not the primary render strategy.

@@ -458,9 +458,9 @@ two-cell anchor receives one unambiguous translation from the completed layout. 
 growing `shift="cells"` lane stays where authored when its anchor is outside that lane. Absolute
 anchors stay fixed, and a two-cell anchor transformation that would resize the chart is rejected.
 Ordinary two-dimensional area, bar or column, line, pie, and scatter charts are supported. Chart
-sheets, pivot or combined charts, three-dimensional charts, shapes, external or named references,
-dynamic formulas, and native Excel Table structured references are rejected. Charts are never
-resized, repeated, or assigned a larger data range by rendering.
+sheets, pivot or combined charts, three-dimensional charts, external or named references, dynamic
+formulas, and native Excel Table structured references are rejected. Charts are never resized,
+repeated, or assigned a larger data range by rendering.
 
 ## Template-authored images
 
@@ -476,8 +476,30 @@ pictures.
 
 Pictures are not repeated. If a repeat would copy an anchor, or a condition would remove it, the
 template is rejected. Linked images, unsupported formats, picture hyperlinks, vector fallbacks,
-worksheet backgrounds, header/footer pictures, shapes, and grouped drawings are not silently
-dropped; they are outside the supported profile.
+worksheet backgrounds, header/footer pictures, and grouped drawings are not silently dropped;
+they are outside the supported profile.
+
+## Template-authored text shapes
+
+Static editable text shapes already authored in Excel are preserved without a directive. This
+includes ordinary ungrouped text boxes and text-bearing decorative shapes such as rectangles,
+rounded rectangles, arrows, and callouts. Their rich text, paragraphs, fill, outline, preset
+geometry, rotation, margins, wrapping, autofit or overflow settings, name, and description remain
+authoritative.
+
+Shape text is not template syntax in this release. For example, `{{ customer.name }}` written
+inside a text box remains those literal characters in the rendered workbook. The renderer does not
+measure the text or resize the shape.
+
+Cell-anchored shapes follow the completed layout like pictures and charts. A one-cell shape below a
+growing table moves down. Under `shift="cells"`, marker coordinates decide whether the shape is in
+the moving lane; its visible bounds do not. Absolute anchors remain fixed. Both corners of a
+two-cell anchor must receive the same translation, because resizing is not supported. Shapes are
+never copied per repeat instance.
+
+Grouped shapes, connectors, WordArt or warped text, dynamic fields, cell-linked text, macros,
+shape hyperlinks, image-filled shapes, SmartArt, form controls, OLE objects, legacy VML, and linked
+or external content are rejected explicitly.
 
 ## Common invalid templates
 
@@ -562,7 +584,7 @@ than `rows` or `cells` are rejected during compilation.
 | `E2105` | Conditional formatting would require an unsupported transform |
 | `E2106` | Data validation would require an unsupported transform |
 | `E2107` | Native Excel Table is unsupported by the current writer |
-| `E2108` | Linked image, shape, or another unsupported drawing object cannot be preserved |
+| `E2108` | Linked image, grouped shape, or another unsupported drawing object cannot be preserved |
 | `E2109` | Hyperlink would be copied or moved |
 | `E2110` | Comment would be copied or moved |
 | `E2111` | Cell shifting would repeat a worksheet-wide custom row height |
@@ -572,6 +594,8 @@ than `rows` or `cells` are rejected during compilation.
 | `E2115` | Chart anchor is unsupported, removed, copied, or would require resizing |
 | `E2116` | Embedded image format is outside the supported PNG/JPEG profile |
 | `E2117` | Image anchor is unsupported, removed, copied, or would require resizing |
+| `E2118` | Text shape uses unsupported DrawingML content or relationships |
+| `E2119` | Text-shape anchor is unsupported, removed, copied, or would require resizing |
 | `E2201` | Compressed size, uncompressed size, or ZIP member count exceeded a package limit |
 | `E2202` | Workbook exceeded the configured worksheet-count limit |
 | `E3101` | Formula would require copying, movement, or translation |

@@ -7,7 +7,9 @@ adapter-neutral render plan, and applies the completed plan to a new `.xlsx` wor
 `openpyxl` adapter. Direct cell formatting, formatted blanks, row and column dimensions, and merged
 ranges follow their source template cells. Supported template-authored worksheet charts retain
 their fixed cell references, size, and presentation, and embedded PNG/JPEG pictures retain their
-media and picture presentation, while validated cell-based anchors follow planned table movement.
+media and picture presentation. Editable static text boxes and other supported text-bearing shapes
+retain their authored text, rich formatting, and geometry. Validated cell-based anchors for all
+three drawing profiles follow planned table movement.
 
 The language uses Jinja-like tags inside ordinary cells:
 
@@ -143,4 +145,5 @@ Documentation:
 Affected formulas, conditional formatting, data validation, native Excel Tables, unsupported
 drawings, and other unsupported coordinate-dependent features are rejected explicitly rather than
 silently damaged. Template-authored charts and embedded images use the planned-anchor profiles
-documented in the specification and demonstrated by maintained samples.
+documented in the specification. Static editable text shapes use the same movement model while
+keeping tag-like shape text literal. Maintained samples demonstrate all three profiles.
