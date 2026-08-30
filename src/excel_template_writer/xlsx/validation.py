@@ -11,7 +11,13 @@ from excel_template_writer.diagnostics import Diagnostic, DiagnosticCode, Source
 from excel_template_writer.limits import XLSX_MAX_COLUMNS, XLSX_MAX_ROWS
 from excel_template_writer.model import Coordinate
 from excel_template_writer.render import RenderPlan
-from excel_template_writer.xlsx.model import PlannedChart, SheetFeaturePlan, SheetSnapshot
+from excel_template_writer.xlsx.model import (
+    ChartSnapshot,
+    ImageSnapshot,
+    PlannedDrawing,
+    SheetFeaturePlan,
+    SheetSnapshot,
+)
 
 
 def _location(sheet: SheetSnapshot, coordinate: Coordinate | None = None) -> SourceLocation:
@@ -126,7 +132,7 @@ def plan_sheet_features(
     """
 
     diagnostics: list[Diagnostic] = []
-    planned_charts: list[PlannedChart] = []
+    planned_drawings: list[PlannedDrawing] = []
     has_layout = bool(compiled.children)
     destinations = _destinations_by_source(plan)
 
@@ -158,57 +164,72 @@ def plan_sheet_features(
         diagnostics.append(
             Diagnostic(
                 DiagnosticCode.DRAWING_REQUIRES_UNSUPPORTED_TRANSFORM,
-                "images, shapes, and unsupported drawing objects cannot be preserved",
+                "linked images, shapes, and unsupported drawing objects cannot be preserved",
                 _location(sheet),
             )
         )
 
-    for chart in sheet.charts:
+    for drawing in sheet.drawings:
         location = _location(
             sheet,
-            chart.anchor_coordinates[0] if chart.anchor_coordinates else None,
+            drawing.anchor_coordinates[0] if drawing.anchor_coordinates else None,
         )
-        if not chart.has_supported_type or chart.is_combined or chart.is_pivot:
+        if isinstance(drawing, ChartSnapshot):
+            anchor_code = DiagnosticCode.CHART_ANCHOR_REQUIRES_UNSUPPORTED_TRANSFORM
+            drawing_name = "chart"
+            if not drawing.has_supported_type or drawing.is_combined or drawing.is_pivot:
+                diagnostics.append(
+                    Diagnostic(
+                        DiagnosticCode.CHART_TYPE_UNSUPPORTED,
+                        f"{drawing.chart_type} is not in the supported worksheet chart profile",
+                        location,
+                    )
+                )
+            if not drawing.references or any(
+                not _is_supported_chart_reference(reference, worksheet_names)
+                for reference in drawing.references
+            ):
+                diagnostics.append(
+                    Diagnostic(
+                        DiagnosticCode.CHART_REFERENCE_UNSUPPORTED,
+                        "chart formulas must be direct concrete A1 ranges in this workbook",
+                        location,
+                    )
+                )
+        else:
+            assert isinstance(drawing, ImageSnapshot)
+            anchor_code = DiagnosticCode.IMAGE_ANCHOR_REQUIRES_UNSUPPORTED_TRANSFORM
+            drawing_name = "image"
+            if not drawing.has_supported_format:
+                diagnostics.append(
+                    Diagnostic(
+                        DiagnosticCode.IMAGE_FORMAT_UNSUPPORTED,
+                        "embedded images must contain valid PNG or JPEG media",
+                        location,
+                    )
+                )
+        if not drawing.has_supported_anchor:
             diagnostics.append(
                 Diagnostic(
-                    DiagnosticCode.CHART_TYPE_UNSUPPORTED,
-                    f"{chart.chart_type} is not in the supported worksheet chart profile",
+                    anchor_code,
+                    f"{drawing_name} anchor type is not supported",
                     location,
                 )
             )
-        if not chart.references or any(
-            not _is_supported_chart_reference(reference, worksheet_names)
-            for reference in chart.references
-        ):
-            diagnostics.append(
-                Diagnostic(
-                    DiagnosticCode.CHART_REFERENCE_UNSUPPORTED,
-                    "chart formulas must be direct concrete A1 ranges in this workbook",
-                    location,
-                )
-            )
-        if not chart.has_supported_anchor:
-            diagnostics.append(
-                Diagnostic(
-                    DiagnosticCode.CHART_ANCHOR_REQUIRES_UNSUPPORTED_TRANSFORM,
-                    "chart anchor type is not supported",
-                    location,
-                )
-            )
-            planned_charts.append(PlannedChart(chart.anchor_coordinates))
+            planned_drawings.append(PlannedDrawing(drawing.anchor_coordinates))
             continue
         anchor_destinations: list[Coordinate] = []
-        for coordinate in chart.anchor_coordinates:
+        for coordinate in drawing.anchor_coordinates:
             targets = destinations.get(coordinate, [])
             if len(targets) != 1:
                 diagnostics.append(
                     Diagnostic(
-                        DiagnosticCode.CHART_ANCHOR_REQUIRES_UNSUPPORTED_TRANSFORM,
-                        "chart anchor would be removed or copied by structural rendering",
+                        anchor_code,
+                        f"{drawing_name} anchor would be removed or copied by structural rendering",
                         _location(sheet, coordinate),
                     )
                 )
-                anchor_destinations = list(chart.anchor_coordinates)
+                anchor_destinations = list(drawing.anchor_coordinates)
                 break
             anchor_destinations.append(targets[0])
         else:
@@ -218,7 +239,7 @@ def plan_sheet_features(
                     destination.column - source.column,
                 )
                 for source, destination in zip(
-                    chart.anchor_coordinates,
+                    drawing.anchor_coordinates,
                     anchor_destinations,
                     strict=True,
                 )
@@ -226,13 +247,14 @@ def plan_sheet_features(
             if len(deltas) > 1:
                 diagnostics.append(
                     Diagnostic(
-                        DiagnosticCode.CHART_ANCHOR_REQUIRES_UNSUPPORTED_TRANSFORM,
-                        "chart anchor markers would move by different offsets and resize the chart",
+                        anchor_code,
+                        f"{drawing_name} anchor markers would move by different offsets "
+                        "and resize it",
                         location,
                     )
                 )
-                anchor_destinations = list(chart.anchor_coordinates)
-        planned_charts.append(PlannedChart(tuple(anchor_destinations)))
+                anchor_destinations = list(drawing.anchor_coordinates)
+        planned_drawings.append(PlannedDrawing(tuple(anchor_destinations)))
 
     coordinate_features = (
         (
@@ -284,4 +306,4 @@ def plan_sheet_features(
                     )
                 )
                 break
-    return SheetFeaturePlan(tuple(planned_charts)), tuple(diagnostics)
+    return SheetFeaturePlan(tuple(planned_drawings)), tuple(diagnostics)

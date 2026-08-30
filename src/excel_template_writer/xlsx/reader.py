@@ -5,6 +5,7 @@ from __future__ import annotations
 import posixpath
 from collections.abc import Iterable
 from copy import copy, deepcopy
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 from xml.etree import ElementTree
@@ -13,6 +14,8 @@ from zipfile import ZipFile
 from openpyxl import load_workbook
 from openpyxl.cell.cell import MergedCell
 from openpyxl.chart import AreaChart, BarChart, LineChart, PieChart, ScatterChart
+from openpyxl.chart.chartspace import ChartSpace
+from openpyxl.chart.reader import read_chart
 from openpyxl.drawing.spreadsheet_drawing import AbsoluteAnchor, OneCellAnchor, TwoCellAnchor
 from openpyxl.utils import column_index_from_string
 from openpyxl.worksheet.cell_range import CellRange
@@ -24,23 +27,59 @@ from excel_template_writer.xlsx.model import (
     ChartSnapshot,
     ColumnPresentation,
     DimensionPresentation,
+    DrawingSnapshot,
+    ImageSnapshot,
     RowPresentation,
     SheetSnapshot,
     WorkbookSnapshot,
 )
 
 _CHART_NAMESPACE = "http://schemas.openxmlformats.org/drawingml/2006/chart"
+_DRAWING_MAIN_NAMESPACE = "http://schemas.openxmlformats.org/drawingml/2006/main"
 _DRAWING_NAMESPACE = "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
 _DRAWING_RELATIONSHIP = (
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing"
 )
 _CHART_RELATIONSHIP = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart"
+_IMAGE_RELATIONSHIP = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image"
 _OFFICE_RELATIONSHIP_NAMESPACE = (
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 )
 _PACKAGE_RELATIONSHIP_NAMESPACE = "http://schemas.openxmlformats.org/package/2006/relationships"
 _SUPPORTED_CHART_TYPES = (AreaChart, BarChart, LineChart, PieChart, ScatterChart)
 _SUPPORTED_ANCHOR_TYPES = (AbsoluteAnchor, OneCellAnchor, TwoCellAnchor)
+_SUPPORTED_IMAGE_FORMATS = frozenset({"jpeg", "jpg", "png"})
+
+
+@dataclass(frozen=True)
+class _PackageRelationship:
+    relationship_type: str
+    target: str
+    is_external: bool
+
+
+@dataclass(frozen=True)
+class _DrawingPartProfile:
+    drawings: tuple[DrawingSnapshot, ...]
+    has_unsupported_objects: bool
+
+
+def _has_supported_image_media(image_format: str, data: bytes) -> bool:
+    """Return whether media has a supported extension and basic file signature.
+
+    Args:
+        image_format: Lowercase media-part extension.
+        data: Embedded media payload.
+
+    Returns:
+        ``True`` for structurally recognizable PNG or JPEG media.
+    """
+
+    if image_format == "png":
+        return data.startswith(b"\x89PNG\r\n\x1a\n")
+    if image_format in {"jpeg", "jpg"}:
+        return data.startswith(b"\xff\xd8") and data.endswith(b"\xff\xd9")
+    return False
 
 
 def _qualified_name(namespace: str, local_name: str) -> str:
@@ -73,18 +112,18 @@ def _normalized_part_target(source_part: str, target: str) -> str:
     return posixpath.normpath(posixpath.join(posixpath.dirname(source_part), target))
 
 
-def _drawing_chart_relationships(
+def _drawing_relationships(
     archive: ZipFile,
     drawing_name: str,
-) -> dict[str, str]:
-    """Resolve chart relationship IDs owned by one drawing part.
+) -> dict[str, _PackageRelationship]:
+    """Resolve relationships owned by one drawing part.
 
     Args:
         archive: Open XLSX ZIP archive.
         drawing_name: Package-relative drawing-part path.
 
     Returns:
-        Relationship IDs mapped to normalized chart-part paths.
+        Relationship IDs mapped to their type, target, and external flag.
     """
 
     directory, filename = posixpath.split(drawing_name)
@@ -92,170 +131,25 @@ def _drawing_chart_relationships(
     if relationships_name not in archive.namelist():
         return {}
     root = ElementTree.fromstring(archive.read(relationships_name))
-    relationships: dict[str, str] = {}
+    relationships: dict[str, _PackageRelationship] = {}
     for element in root:
-        if (
-            element.tag != _qualified_name(_PACKAGE_RELATIONSHIP_NAMESPACE, "Relationship")
-            or element.get("Type") != _CHART_RELATIONSHIP
-        ):
+        if element.tag != _qualified_name(_PACKAGE_RELATIONSHIP_NAMESPACE, "Relationship"):
             continue
         relationship_id = element.get("Id")
+        relationship_type = element.get("Type")
         target = element.get("Target")
-        if relationship_id is not None and target is not None:
-            relationships[relationship_id] = _normalized_part_target(drawing_name, target)
+        is_external = element.get("TargetMode") == "External"
+        if relationship_id is not None and relationship_type is not None and target is not None:
+            relationships[relationship_id] = _PackageRelationship(
+                relationship_type,
+                target if is_external else _normalized_part_target(drawing_name, target),
+                is_external,
+            )
     return relationships
 
 
-def _drawing_profiles(path: Path) -> dict[str, tuple[bool, tuple[str, ...]]]:
-    """Inspect drawing parts before openpyxl can discard unsupported objects.
-
-    Args:
-        path: XLSX package to inspect.
-
-    Returns:
-        Drawing-part paths mapped to ``(chart_only, chart_part_paths)``.
-    """
-
-    profiles: dict[str, tuple[bool, tuple[str, ...]]] = {}
-    with ZipFile(path) as archive:
-        drawing_names = (
-            name
-            for name in archive.namelist()
-            if name.startswith("xl/drawings/drawing") and name.endswith(".xml")
-        )
-        for name in drawing_names:
-            root = ElementTree.fromstring(archive.read(name))
-            chart_relationships = _drawing_chart_relationships(archive, name)
-            chart_parts: list[str] = []
-            chart_only = root.tag == _qualified_name(_DRAWING_NAMESPACE, "wsDr")
-            anchors = list(root)
-            if not anchors:
-                chart_only = False
-            for anchor in anchors:
-                if anchor.tag not in {
-                    _qualified_name(_DRAWING_NAMESPACE, "absoluteAnchor"),
-                    _qualified_name(_DRAWING_NAMESPACE, "oneCellAnchor"),
-                    _qualified_name(_DRAWING_NAMESPACE, "twoCellAnchor"),
-                }:
-                    chart_only = False
-                    continue
-                frame_parts: list[str] = []
-                for child in anchor:
-                    if child.tag in {
-                        _qualified_name(_DRAWING_NAMESPACE, "clientData"),
-                        _qualified_name(_DRAWING_NAMESPACE, "ext"),
-                        _qualified_name(_DRAWING_NAMESPACE, "from"),
-                        _qualified_name(_DRAWING_NAMESPACE, "pos"),
-                        _qualified_name(_DRAWING_NAMESPACE, "to"),
-                    }:
-                        continue
-                    if child.tag != _qualified_name(_DRAWING_NAMESPACE, "graphicFrame"):
-                        chart_only = False
-                        continue
-                    chart_elements = [
-                        descendant
-                        for descendant in child.iter()
-                        if descendant.tag == _qualified_name(_CHART_NAMESPACE, "chart")
-                    ]
-                    if len(chart_elements) != 1:
-                        chart_only = False
-                        continue
-                    relationship_id = chart_elements[0].get(
-                        _qualified_name(_OFFICE_RELATIONSHIP_NAMESPACE, "id")
-                    )
-                    chart_part = chart_relationships.get(relationship_id or "")
-                    if chart_part is None:
-                        chart_only = False
-                        continue
-                    frame_parts.append(chart_part)
-                if len(frame_parts) != 1:
-                    chart_only = False
-                chart_parts.extend(frame_parts)
-            profiles[name] = chart_only, tuple(chart_parts)
-    return profiles
-
-
-def _chart_space_properties(path: Path) -> dict[str, tuple[Any, Any]]:
-    """Read chart-space properties omitted by openpyxl's chart reader.
-
-    Args:
-        path: XLSX package containing chart XML parts.
-
-    Returns:
-        Chart-part paths mapped to style and rounded-corner values.
-    """
-
-    properties: dict[str, tuple[Any, Any]] = {}
-    with ZipFile(path) as archive:
-        for name in archive.namelist():
-            if not name.startswith("xl/charts/chart") or not name.endswith(".xml"):
-                continue
-            root = ElementTree.fromstring(archive.read(name))
-            style = root.find(_qualified_name(_CHART_NAMESPACE, "style"))
-            rounded = root.find(_qualified_name(_CHART_NAMESPACE, "roundedCorners"))
-            style_value = None if style is None else int(style.get("val", "0"))
-            rounded_value = (
-                None if rounded is None else rounded.get("val", "0").lower() in {"1", "true"}
-            )
-            properties[name] = (style_value, rounded_value)
-    return properties
-
-
-def _sheet_has_unsupported_drawings(
-    sheet: Worksheet,
-    profiles: dict[str, tuple[bool, tuple[str, ...]]],
-) -> bool:
-    """Return whether a sheet drawing part contains anything except parsed charts.
-
-    Args:
-        sheet: Loaded worksheet whose drawing relationships are inspected.
-        profiles: Package drawing-part classifications keyed by normalized path.
-
-    Returns:
-        ``True`` when any drawing content cannot be preserved by the chart profile.
-    """
-
-    relationships = [
-        relationship for relationship in sheet._rels if relationship.Type == _DRAWING_RELATIONSHIP
-    ]
-    if not relationships:
-        return bool(sheet._images)
-    chart_count = 0
-    for relationship in relationships:
-        target = relationship.Target.lstrip("/")
-        profile = profiles.get(target)
-        if profile is None or not profile[0]:
-            return True
-        chart_count += len(profile[1])
-    return chart_count != len(sheet._charts)
-
-
-def _sheet_chart_parts(
-    sheet: Worksheet,
-    profiles: dict[str, tuple[bool, tuple[str, ...]]],
-) -> tuple[str, ...]:
-    """Return chart-part paths in the same drawing order as loaded charts.
-
-    Args:
-        sheet: Loaded worksheet whose drawing relationships are inspected.
-        profiles: Package drawing-part classifications and chart targets.
-
-    Returns:
-        Normalized chart-part paths in worksheet drawing order.
-    """
-
-    parts: list[str] = []
-    for relationship in sheet._rels:
-        if relationship.Type != _DRAWING_RELATIONSHIP:
-            continue
-        profile = profiles.get(relationship.Target.lstrip("/"))
-        if profile is not None:
-            parts.extend(profile[1])
-    return tuple(parts)
-
-
 def _anchor_coordinates(anchor: Any) -> tuple[Coordinate, ...]:
-    """Return the cell markers used by one supported chart anchor.
+    """Return the cell markers used by one supported drawing anchor.
 
     Args:
         anchor: Openpyxl absolute, one-cell, two-cell, or unsupported anchor.
@@ -293,42 +187,219 @@ def _chart_references(chart: Any) -> tuple[str, ...]:
     )
 
 
-def _read_charts(
-    sheet: Worksheet,
-    chart_parts: tuple[str, ...],
-    chart_space_properties: dict[str, tuple[Any, Any]],
-) -> tuple[ChartSnapshot, ...]:
-    """Detach supported and unsupported chart metadata for later validation.
+def _parse_anchor(element: ElementTree.Element) -> Any | None:
+    """Parse one supported DrawingML anchor element.
 
     Args:
-        sheet: Loaded worksheet containing zero or more charts.
-        chart_parts: Actual chart-part paths in drawing order.
-        chart_space_properties: Package-level chart properties omitted during load.
+        element: Raw anchor element from a worksheet drawing part.
 
     Returns:
-        Detached chart snapshots in worksheet drawing order.
+        Parsed openpyxl anchor, or ``None`` when the type or content is unsupported.
     """
 
-    snapshots: list[ChartSnapshot] = []
-    for index, source in enumerate(sheet._charts):
-        chart = deepcopy(source)
-        chart_part = chart_parts[index] if index < len(chart_parts) else None
-        properties = chart_space_properties.get(chart_part or "")
-        if properties is not None:
-            chart.style, chart.roundedCorners = properties
-        snapshots.append(
-            ChartSnapshot(
-                chart=chart,
-                chart_type=type(chart).__name__,
-                anchor_coordinates=_anchor_coordinates(chart.anchor),
-                references=_chart_references(chart),
-                has_supported_type=type(chart) in _SUPPORTED_CHART_TYPES,
-                has_supported_anchor=type(chart.anchor) in _SUPPORTED_ANCHOR_TYPES,
-                is_combined=len(chart._charts) != 1,
-                is_pivot=chart.pivotSource is not None,
-            )
+    anchor_type = {
+        _qualified_name(_DRAWING_NAMESPACE, "absoluteAnchor"): AbsoluteAnchor,
+        _qualified_name(_DRAWING_NAMESPACE, "oneCellAnchor"): OneCellAnchor,
+        _qualified_name(_DRAWING_NAMESPACE, "twoCellAnchor"): TwoCellAnchor,
+    }.get(element.tag)
+    if anchor_type is None:
+        return None
+    try:
+        return anchor_type.from_tree(element)
+    except (TypeError, ValueError):
+        return None
+
+
+def _read_chart_part(
+    archive: ZipFile,
+    chart_part: str,
+    anchor: Any,
+) -> ChartSnapshot:
+    """Read one chart part and bind its exact source drawing anchor.
+
+    Args:
+        archive: XLSX package containing the chart.
+        chart_part: Package-relative chart XML path.
+        anchor: Parsed source drawing anchor.
+
+    Returns:
+        Detached validated-chart input snapshot.
+    """
+
+    chart_space = ChartSpace.from_tree(ElementTree.fromstring(archive.read(chart_part)))
+    chart = read_chart(chart_space)
+    chart.style = chart_space.style
+    chart.roundedCorners = chart_space.roundedCorners
+    detached_anchor = deepcopy(anchor)
+    detached_anchor.graphicFrame = None
+    chart.anchor = detached_anchor
+    return ChartSnapshot(
+        chart=chart,
+        chart_type=type(chart).__name__,
+        anchor_coordinates=_anchor_coordinates(detached_anchor),
+        references=_chart_references(chart),
+        has_supported_type=type(chart) in _SUPPORTED_CHART_TYPES,
+        has_supported_anchor=type(detached_anchor) in _SUPPORTED_ANCHOR_TYPES,
+        is_combined=len(chart._charts) != 1,
+        is_pivot=chart.pivotSource is not None,
+    )
+
+
+def _drawing_profiles(path: Path) -> dict[str, _DrawingPartProfile]:
+    """Inspect and snapshot ordered supported worksheet drawings.
+
+    Args:
+        path: XLSX package to inspect.
+
+    Returns:
+        Drawing-part paths mapped to ordered drawings and unsupported-object state.
+    """
+
+    profiles: dict[str, _DrawingPartProfile] = {}
+    with ZipFile(path) as archive:
+        archive_names = frozenset(archive.namelist())
+        drawing_names = (
+            name
+            for name in archive_names
+            if name.startswith("xl/drawings/drawing") and name.endswith(".xml")
         )
-    return tuple(snapshots)
+        for name in drawing_names:
+            root = ElementTree.fromstring(archive.read(name))
+            relationships = _drawing_relationships(archive, name)
+            drawings: list[DrawingSnapshot] = []
+            used_relationship_ids: set[str] = set()
+            has_unsupported = root.tag != _qualified_name(_DRAWING_NAMESPACE, "wsDr")
+            anchors = list(root)
+            if not anchors:
+                has_unsupported = True
+            for anchor_element in anchors:
+                anchor = _parse_anchor(anchor_element)
+                if anchor is None:
+                    has_unsupported = True
+                    continue
+                object_children: list[ElementTree.Element] = []
+                for child in anchor_element:
+                    if child.tag in {
+                        _qualified_name(_DRAWING_NAMESPACE, "clientData"),
+                        _qualified_name(_DRAWING_NAMESPACE, "ext"),
+                        _qualified_name(_DRAWING_NAMESPACE, "from"),
+                        _qualified_name(_DRAWING_NAMESPACE, "pos"),
+                        _qualified_name(_DRAWING_NAMESPACE, "to"),
+                    }:
+                        continue
+                    object_children.append(child)
+                if len(object_children) != 1:
+                    has_unsupported = True
+                    continue
+                drawing_object = object_children[0]
+                if drawing_object.tag == _qualified_name(_DRAWING_NAMESPACE, "graphicFrame"):
+                    chart_elements = [
+                        descendant
+                        for descendant in drawing_object.iter()
+                        if descendant.tag == _qualified_name(_CHART_NAMESPACE, "chart")
+                    ]
+                    if len(chart_elements) != 1:
+                        has_unsupported = True
+                        continue
+                    relationship_id = chart_elements[0].get(
+                        _qualified_name(_OFFICE_RELATIONSHIP_NAMESPACE, "id")
+                    )
+                    relationship = relationships.get(relationship_id or "")
+                    if (
+                        relationship_id is None
+                        or relationship is None
+                        or relationship.relationship_type != _CHART_RELATIONSHIP
+                        or relationship.is_external
+                        or relationship.target not in archive_names
+                    ):
+                        has_unsupported = True
+                        continue
+                    used_relationship_ids.add(relationship_id)
+                    try:
+                        drawings.append(_read_chart_part(archive, relationship.target, anchor))
+                    except (TypeError, ValueError, KeyError, IndexError):
+                        has_unsupported = True
+                    continue
+                if drawing_object.tag == _qualified_name(_DRAWING_NAMESPACE, "pic"):
+                    blips = [
+                        descendant
+                        for descendant in drawing_object.iter()
+                        if descendant.tag == _qualified_name(_DRAWING_MAIN_NAMESPACE, "blip")
+                    ]
+                    if len(blips) != 1:
+                        has_unsupported = True
+                        continue
+                    embed_id = blips[0].get(
+                        _qualified_name(_OFFICE_RELATIONSHIP_NAMESPACE, "embed")
+                    )
+                    linked_id = blips[0].get(
+                        _qualified_name(_OFFICE_RELATIONSHIP_NAMESPACE, "link")
+                    )
+                    relationship = relationships.get(embed_id or "")
+                    if (
+                        embed_id is None
+                        or linked_id is not None
+                        or relationship is None
+                        or relationship.relationship_type != _IMAGE_RELATIONSHIP
+                        or relationship.is_external
+                        or relationship.target not in archive_names
+                    ):
+                        has_unsupported = True
+                        continue
+                    used_relationship_ids.add(embed_id)
+                    image_format = posixpath.splitext(relationship.target)[1].lstrip(".").lower()
+                    image_data = archive.read(relationship.target)
+                    drawings.append(
+                        ImageSnapshot(
+                            data=image_data,
+                            image_format=image_format,
+                            anchor=deepcopy(anchor),
+                            anchor_coordinates=_anchor_coordinates(anchor),
+                            has_supported_format=(
+                                image_format in _SUPPORTED_IMAGE_FORMATS
+                                and _has_supported_image_media(image_format, image_data)
+                            ),
+                            has_supported_anchor=type(anchor) in _SUPPORTED_ANCHOR_TYPES,
+                        )
+                    )
+                    continue
+                has_unsupported = True
+            if set(relationships) != used_relationship_ids:
+                has_unsupported = True
+            profiles[name] = _DrawingPartProfile(tuple(drawings), has_unsupported)
+    return profiles
+
+
+def _sheet_drawing_state(
+    sheet: Worksheet,
+    profiles: dict[str, _DrawingPartProfile],
+) -> tuple[tuple[DrawingSnapshot, ...], bool]:
+    """Collect one worksheet's ordered drawings and unsupported state.
+
+    Args:
+        sheet: Loaded worksheet whose drawing relationships are inspected.
+        profiles: Package drawing-part snapshots keyed by normalized path.
+
+    Returns:
+        Ordered supported drawings and whether any drawing content is unsupported.
+    """
+
+    drawings: list[DrawingSnapshot] = []
+    has_unsupported = False
+    for relationship in sheet._rels:
+        if relationship.Type == _IMAGE_RELATIONSHIP:
+            has_unsupported = True
+            continue
+        if relationship.Type != _DRAWING_RELATIONSHIP:
+            continue
+        target = relationship.Target.lstrip("/")
+        profile = profiles.get(target)
+        if profile is None:
+            has_unsupported = True
+            continue
+        drawings.extend(profile.drawings)
+        has_unsupported = has_unsupported or profile.has_unsupported_objects
+    return tuple(drawings), has_unsupported
 
 
 def _dimension_presentation(dimension: Any) -> DimensionPresentation:
@@ -479,27 +550,21 @@ def _cell_presentation(cell: Any) -> CellPresentation:
 
 def _read_sheet(
     sheet: Worksheet,
-    drawing_profiles: dict[str, tuple[bool, tuple[str, ...]]],
-    chart_space_properties: dict[str, tuple[Any, Any]],
+    drawing_profiles: dict[str, _DrawingPartProfile],
 ) -> SheetSnapshot:
     """Detach supported values, presentation, dimensions, and feature flags.
 
     Args:
         sheet: Openpyxl worksheet to snapshot.
         drawing_profiles: Package drawing-part classifications.
-        chart_space_properties: Chart properties omitted by openpyxl's reader.
 
     Returns:
         Immutable adapter-owned worksheet state.
     """
 
-    charts = _read_charts(
-        sheet,
-        _sheet_chart_parts(sheet, drawing_profiles),
-        chart_space_properties,
-    )
-    chart_anchor_coordinates = {
-        coordinate for chart in charts for coordinate in chart.anchor_coordinates
+    drawings, has_unsupported_drawings = _sheet_drawing_state(sheet, drawing_profiles)
+    drawing_anchor_coordinates = {
+        coordinate for drawing in drawings for coordinate in drawing.anchor_coordinates
     }
     merged_ranges = _read_merges(sheet)
     merge_coordinates = _merge_coordinates(merged_ranges)
@@ -532,12 +597,12 @@ def _read_sheet(
             if presentations[coordinate].comment is not None:
                 comment_cells.append(coordinate)
 
-    synthetic_chart_anchor_cells: set[Coordinate] = set()
-    for coordinate in chart_anchor_coordinates.difference(values):
+    synthetic_drawing_anchor_cells: set[Coordinate] = set()
+    for coordinate in drawing_anchor_coordinates.difference(values):
         cell = sheet.cell(coordinate.row, coordinate.column)
         values[coordinate] = None
         presentations[coordinate] = _cell_presentation(cell)
-        synthetic_chart_anchor_cells.add(coordinate)
+        synthetic_drawing_anchor_cells.add(coordinate)
 
     freeze_panes = sheet.freeze_panes
     if freeze_panes is not None and not isinstance(freeze_panes, str):
@@ -561,9 +626,9 @@ def _read_sheet(
         has_conditional_formatting=bool(len(sheet.conditional_formatting)),
         has_data_validations=bool(sheet.data_validations.count),
         has_tables=bool(sheet.tables),
-        charts=charts,
-        synthetic_chart_anchor_cells=frozenset(synthetic_chart_anchor_cells),
-        has_unsupported_drawings=_sheet_has_unsupported_drawings(sheet, drawing_profiles),
+        drawings=drawings,
+        synthetic_drawing_anchor_cells=frozenset(synthetic_drawing_anchor_cells),
+        has_unsupported_drawings=has_unsupported_drawings,
     )
 
 
@@ -579,14 +644,10 @@ def read_workbook(path: str | Path) -> WorkbookSnapshot:
 
     source_path = Path(path)
     drawing_profiles = _drawing_profiles(source_path)
-    chart_space_properties = _chart_space_properties(source_path)
     workbook = load_workbook(source_path, data_only=False, keep_links=False)
     try:
         return WorkbookSnapshot(
-            sheets=tuple(
-                _read_sheet(sheet, drawing_profiles, chart_space_properties)
-                for sheet in workbook.worksheets
-            ),
+            sheets=tuple(_read_sheet(sheet, drawing_profiles) for sheet in workbook.worksheets),
             chartsheets=tuple(sheet.title for sheet in workbook.chartsheets),
             properties=copy(workbook.properties),
             loaded_theme=workbook.loaded_theme,

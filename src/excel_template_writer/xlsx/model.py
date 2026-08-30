@@ -63,18 +63,31 @@ class ChartSnapshot:
 
 
 @dataclass(frozen=True)
-class PlannedChart:
+class ImageSnapshot:
+    data: bytes
+    image_format: str
+    anchor: Any
+    anchor_coordinates: tuple[Coordinate, ...]
+    has_supported_format: bool
+    has_supported_anchor: bool
+
+
+DrawingSnapshot = ChartSnapshot | ImageSnapshot
+
+
+@dataclass(frozen=True)
+class PlannedDrawing:
     anchor_coordinates: tuple[Coordinate, ...]
 
 
 @dataclass(frozen=True)
 class SheetFeaturePlan:
-    charts: tuple[PlannedChart, ...]
+    drawings: tuple[PlannedDrawing, ...]
 
     def __post_init__(self) -> None:
-        """Normalize planned chart collections to immutable tuples."""
+        """Normalize planned drawing collections to immutable tuples."""
 
-        object.__setattr__(self, "charts", tuple(self.charts))
+        object.__setattr__(self, "drawings", tuple(self.drawings))
 
 
 @dataclass(frozen=True)
@@ -97,8 +110,8 @@ class SheetSnapshot:
     has_conditional_formatting: bool
     has_data_validations: bool
     has_tables: bool
-    charts: tuple[ChartSnapshot, ...]
-    synthetic_chart_anchor_cells: frozenset[Coordinate]
+    drawings: tuple[DrawingSnapshot, ...]
+    synthetic_drawing_anchor_cells: frozenset[Coordinate]
     has_unsupported_drawings: bool
 
     def __post_init__(self) -> None:
@@ -107,11 +120,11 @@ class SheetSnapshot:
         object.__setattr__(self, "cells", MappingProxyType(dict(self.cells)))
         object.__setattr__(self, "rows", MappingProxyType(dict(self.rows)))
         object.__setattr__(self, "columns", MappingProxyType(dict(self.columns)))
-        object.__setattr__(self, "charts", tuple(self.charts))
+        object.__setattr__(self, "drawings", tuple(self.drawings))
         object.__setattr__(
             self,
-            "synthetic_chart_anchor_cells",
-            frozenset(self.synthetic_chart_anchor_cells),
+            "synthetic_drawing_anchor_cells",
+            frozenset(self.synthetic_drawing_anchor_cells),
         )
 
 

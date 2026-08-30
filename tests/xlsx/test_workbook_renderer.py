@@ -30,21 +30,38 @@ from excel_template_writer.values import TypeAdapter
 from excel_template_writer.xlsx import render_workbook
 
 
-class _StaticPngImage(Image):
-    def __init__(self) -> None:
+class _StaticImage(Image):
+    def __init__(self, image_format: str = "png", data: bytes | None = None) -> None:
         """Create a Pillow-independent image for unsupported-drawing tests."""
 
         self.width = 1
         self.height = 1
-        self.format = "png"
-
-    def _data(self) -> bytes:
-        """Return one valid one-pixel PNG payload."""
-
-        return base64.b64decode(
+        self.format = image_format
+        self._payload = data or base64.b64decode(
             "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUB"
             "AScY42YAAAAASUVORK5CYII="
         )
+
+    def _data(self) -> bytes:
+        """Return the configured embedded image payload."""
+
+        return self._payload
+
+
+_ONE_PIXEL_JPEG = base64.b64decode(
+    "/9j/4AAQSkZJRgABAQEAYABgAAD/2wBDAAMCAgMCAgMDAwMEAwMEBQgFBQQEBQoHBwYIDAoM"
+    "DAsKCwsNDhIQDQ4RDgsLEBYQERMUFRUVDA8XGBYUGBIUFRT/2wBDAQMEBAUEBQkFBQkUDQsN"
+    "FBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBT/wAA"
+    "RCAABAAEDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAA"
+    "AgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkK"
+    "FhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWG"
+    "h4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl"
+    "5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREA"
+    "AgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYk"
+    "NOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOE"
+    "hYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk"
+    "5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwD896KKK/1TPhz/2Q=="
+)
 
 
 def _save(workbook: Workbook, path: Path) -> Path:
@@ -74,6 +91,72 @@ def _chart_style(path: Path, part: str = "chart1.xml") -> str | None:
         None,
     )
     return None if style is None else style.get("val")
+
+
+_DRAWING_NAMESPACE = "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
+_DRAWING_MAIN_NAMESPACE = "http://schemas.openxmlformats.org/drawingml/2006/main"
+_CHART_NAMESPACE = "http://schemas.openxmlformats.org/drawingml/2006/chart"
+
+
+def _drawing_anchors(path: Path, part: str = "drawing1.xml") -> list[ElementTree.Element]:
+    with ZipFile(path) as archive:
+        root = ElementTree.fromstring(archive.read(f"xl/drawings/{part}"))
+    return list(root)
+
+
+def _drawing_kind(anchor: ElementTree.Element) -> str:
+    if anchor.find(f".//{{{_CHART_NAMESPACE}}}chart") is not None:
+        return "chart"
+    if anchor.find(f".//{{{_DRAWING_MAIN_NAMESPACE}}}blip") is not None:
+        return "image"
+    return "unsupported"
+
+
+def _anchor_marker(anchor: ElementTree.Element, marker: str = "from") -> tuple[int, int]:
+    element = anchor.find(f"{{{_DRAWING_NAMESPACE}}}{marker}")
+    assert element is not None
+    row = element.find(f"{{{_DRAWING_NAMESPACE}}}row")
+    column = element.find(f"{{{_DRAWING_NAMESPACE}}}col")
+    assert row is not None and row.text is not None
+    assert column is not None and column.text is not None
+    return int(row.text), int(column.text)
+
+
+def _drawing_ext(anchor: ElementTree.Element) -> tuple[str | None, str | None]:
+    extent = anchor.find(f"{{{_DRAWING_NAMESPACE}}}ext")
+    assert extent is not None
+    return extent.get("cx"), extent.get("cy")
+
+
+def _picture_metadata(anchor: ElementTree.Element) -> tuple[str | None, str | None]:
+    properties = anchor.find(f".//{{{_DRAWING_NAMESPACE}}}cNvPr")
+    assert properties is not None
+    return properties.get("name"), properties.get("descr")
+
+
+def _media_payloads(path: Path) -> list[bytes]:
+    with ZipFile(path) as archive:
+        names = sorted(name for name in archive.namelist() if name.startswith("xl/media/"))
+        return [archive.read(name) for name in names]
+
+
+def _set_drawing_order(path: Path, order: tuple[str, ...]) -> None:
+    temporary_path = path.with_name(f"{path.stem}-reordered.xlsx")
+    with ZipFile(path, "r") as source, ZipFile(temporary_path, "w") as destination:
+        for member in source.infolist():
+            data = source.read(member.filename)
+            if member.filename == "xl/drawings/drawing1.xml":
+                root = ElementTree.fromstring(data)
+                anchors = list(root)
+                selected: list[ElementTree.Element] = []
+                for kind in order:
+                    selected.append(
+                        next(anchor for anchor in anchors if _drawing_kind(anchor) == kind)
+                    )
+                root[:] = selected
+                data = ElementTree.tostring(root, encoding="utf-8")
+            destination.writestr(member, data)
+    temporary_path.replace(path)
 
 
 def test_render_workbook_normalizes_adapter_values_once_for_all_sheets(
@@ -744,20 +827,168 @@ def test_rejects_unsupported_chart_type_and_reference(tmp_path: Path) -> None:
     assert not output_path.exists()
 
 
-def test_rejects_image_drawing_instead_of_silently_dropping_it(tmp_path: Path) -> None:
+def test_preserves_embedded_image_and_moves_it_with_row_expansion(tmp_path: Path) -> None:
     template_path = tmp_path / "image-template.xlsx"
+    output_path = tmp_path / "image-output.xlsx"
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet["A1"] = "{% for item in items %}{{ item }}"
+    sheet["B1"] = "{% endfor %}"
+    sheet.add_image(_StaticImage(), "D3")
+    _save(workbook, template_path)
+
+    template_anchor = _drawing_anchors(template_path)[0]
+    render_workbook(template_path, output_path, {"items": [1, 2]})
+
+    output_anchor = _drawing_anchors(output_path)[0]
+    assert _drawing_kind(output_anchor) == "image"
+    assert _anchor_marker(template_anchor) == (2, 3)
+    assert _anchor_marker(output_anchor) == (3, 3)
+    assert _drawing_ext(output_anchor) == _drawing_ext(template_anchor)
+    assert _picture_metadata(output_anchor) == _picture_metadata(template_anchor)
+    assert _media_payloads(output_path) == _media_payloads(template_path)
+
+
+def test_moves_only_images_inside_cell_shift_lane(tmp_path: Path) -> None:
+    template_path = tmp_path / "lane-images-template.xlsx"
+    output_path = tmp_path / "lane-images-output.xlsx"
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet["A1"] = '{% for item in items shift="cells" %}{{ item }}'
+    sheet["B1"] = "{% endfor %}"
+    sheet.add_image(_StaticImage(), "A4")
+    sheet.add_image(_StaticImage(), "D4")
+    _save(workbook, template_path)
+
+    render_workbook(template_path, output_path, {"items": [1, 2, 3]})
+
+    anchors = _drawing_anchors(output_path)
+    assert [_drawing_kind(anchor) for anchor in anchors] == ["image", "image"]
+    assert [_anchor_marker(anchor) for anchor in anchors] == [(5, 0), (3, 3)]
+    assert _media_payloads(output_path) == _media_payloads(template_path)
+
+
+def test_translates_two_cell_image_anchor_without_resizing(tmp_path: Path) -> None:
+    template_path = tmp_path / "two-cell-image-template.xlsx"
+    output_path = tmp_path / "two-cell-image-output.xlsx"
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet["A1"] = "{% for item in items %}{{ item }}"
+    sheet["B1"] = "{% endfor %}"
+    image = _StaticImage()
+    cast(Any, image).anchor = TwoCellAnchor(
+        _from=AnchorMarker(col=3, row=2),
+        to=AnchorMarker(col=8, row=12),
+    )
+    sheet.add_image(image)
+    _save(workbook, template_path)
+
+    render_workbook(template_path, output_path, {"items": [1, 2]})
+
+    anchor = _drawing_anchors(output_path)[0]
+    assert _anchor_marker(anchor) == (3, 3)
+    assert _anchor_marker(anchor, "to") == (13, 8)
+    assert _media_payloads(output_path) == _media_payloads(template_path)
+
+
+def test_rejects_image_anchor_copied_by_repeat(tmp_path: Path) -> None:
+    template_path = tmp_path / "copied-image-anchor-template.xlsx"
     output_path = tmp_path / "should-not-exist.xlsx"
     workbook = Workbook()
-    workbook.active.add_image(_StaticPngImage(), "C1")
+    sheet = workbook.active
+    sheet["A1"] = "{% for item in items %}{{ item }}"
+    sheet["B1"] = "{% endfor %}"
+    sheet.add_image(_StaticImage(), "A1")
+    _save(workbook, template_path)
+
+    with pytest.raises(TemplateCompilationError) as caught:
+        render_workbook(template_path, output_path, {"items": [1, 2]})
+
+    assert DiagnosticCode.IMAGE_ANCHOR_REQUIRES_UNSUPPORTED_TRANSFORM in {
+        diagnostic.code for diagnostic in caught.value.diagnostics
+    }
+    assert not output_path.exists()
+
+
+def test_rejects_two_cell_image_anchor_resize(tmp_path: Path) -> None:
+    template_path = tmp_path / "resized-image-anchor-template.xlsx"
+    output_path = tmp_path / "should-not-exist.xlsx"
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet["A2"] = "{% for item in items %}{{ item }}"
+    sheet["B2"] = "{% endfor %}"
+    image = _StaticImage()
+    cast(Any, image).anchor = TwoCellAnchor(
+        _from=AnchorMarker(col=3, row=0),
+        to=AnchorMarker(col=8, row=3),
+    )
+    sheet.add_image(image)
+    _save(workbook, template_path)
+
+    with pytest.raises(TemplateCompilationError) as caught:
+        render_workbook(template_path, output_path, {"items": [1, 2]})
+
+    assert DiagnosticCode.IMAGE_ANCHOR_REQUIRES_UNSUPPORTED_TRANSFORM in {
+        diagnostic.code for diagnostic in caught.value.diagnostics
+    }
+    assert not output_path.exists()
+
+
+def test_rejects_unsupported_embedded_image_format(tmp_path: Path) -> None:
+    template_path = tmp_path / "bmp-image-template.xlsx"
+    output_path = tmp_path / "should-not-exist.xlsx"
+    workbook = Workbook()
+    workbook.active.add_image(_StaticImage("bmp"), "C1")
     _save(workbook, template_path)
 
     with pytest.raises(TemplateCompilationError) as caught:
         render_workbook(template_path, output_path, {})
 
-    assert DiagnosticCode.DRAWING_REQUIRES_UNSUPPORTED_TRANSFORM in {
+    assert DiagnosticCode.IMAGE_FORMAT_UNSUPPORTED in {
         diagnostic.code for diagnostic in caught.value.diagnostics
     }
     assert not output_path.exists()
+
+
+def test_preserves_embedded_jpeg_bytes(tmp_path: Path) -> None:
+    template_path = tmp_path / "jpeg-image-template.xlsx"
+    output_path = tmp_path / "jpeg-image-output.xlsx"
+    workbook = Workbook()
+    workbook.active["A1"] = "{{ value }}"
+    workbook.active.add_image(_StaticImage("jpeg", _ONE_PIXEL_JPEG), "C1")
+    _save(workbook, template_path)
+
+    render_workbook(template_path, output_path, {"value": 42})
+
+    assert _media_payloads(output_path) == [_ONE_PIXEL_JPEG]
+    with ZipFile(output_path) as archive:
+        assert "xl/media/image1.jpeg" in archive.namelist()
+
+
+def test_preserves_mixed_chart_image_stacking_order(tmp_path: Path) -> None:
+    template_path = tmp_path / "mixed-drawing-template.xlsx"
+    output_path = tmp_path / "mixed-drawing-output.xlsx"
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet["A1"] = "{{ value }}"
+    chart = BarChart()
+    chart.add_data(Reference(sheet, min_col=1, min_row=1, max_row=1))
+    sheet.add_chart(chart, "D2")
+    sheet.add_image(_StaticImage(), "D20")
+    _save(workbook, template_path)
+    _set_drawing_order(template_path, ("image", "chart"))
+
+    render_workbook(template_path, output_path, {"value": 42})
+
+    assert [_drawing_kind(anchor) for anchor in _drawing_anchors(template_path)] == [
+        "image",
+        "chart",
+    ]
+    assert [_drawing_kind(anchor) for anchor in _drawing_anchors(output_path)] == [
+        "image",
+        "chart",
+    ]
+    assert _media_payloads(output_path) == _media_payloads(template_path)
 
 
 def test_rejects_chartsheet(tmp_path: Path) -> None:
