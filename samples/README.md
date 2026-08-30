@@ -29,6 +29,7 @@ When the optional dependency is absent, the generator prints one Polars skip mes
 | `samples.repeated_blocks` | `repeated_blocks_template.xlsx`, `repeated_blocks_output.xlsx` | One-cell lists, styled rectangular table rows, row shifting, formatted blanks, merged footers, and empty-repeat placeholders |
 | `samples.conditions_and_nesting` | `conditions_and_nesting_template.xlsx`, `conditions_and_nesting_output.xlsx` | `if`/`else`, no-`else` conditions, boolean expressions, nested repeats, lexical scope, and bottom-up measurement |
 | `samples.cell_shift_lanes` | `cell_shift_lanes_template.xlsx`, `cell_shift_lanes_output.xlsx` | Side-by-side `shift="cells"` repeats with independently moving lanes and stationary neighboring cells |
+| `samples.fixed_range_charts` | `fixed_range_charts_template.xlsx`, `fixed_range_charts_output.xlsx` | Fixed nine-row chart references across a twelve-row repeat, including a stationary side chart plus charts pushed downward by whole-row and cell-lane expansion |
 | `samples.regions` | `regions_template.xlsx`, `regions_output.xlsx` | Explicit vertical regions, `shift="cells"`, `shift="rows"`, tallest-lane measurement, reserved source height, exact column bands, and nested regions |
 | `samples.polars_dataframe` | `polars_dataframe_template.xlsx`, `polars_dataframe_output.xlsx` | Explicit eager-Polars adapter, row-order preservation, typed values, and null/NaN normalization |
 

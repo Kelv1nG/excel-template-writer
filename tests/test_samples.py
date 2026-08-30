@@ -12,6 +12,7 @@ SAMPLE_STEMS = (
     "repeated_blocks",
     "conditions_and_nesting",
     "cell_shift_lanes",
+    "fixed_range_charts",
     "regions",
     "polars_dataframe",
 )
