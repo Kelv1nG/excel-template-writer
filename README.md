@@ -6,8 +6,8 @@ The current implementation compiles worksheets into a typed spatial AST, evaluat
 adapter-neutral render plan, and applies the completed plan to a new `.xlsx` workbook through an
 `openpyxl` adapter. Direct cell formatting, formatted blanks, row and column dimensions, and merged
 ranges follow their source template cells. Supported template-authored worksheet charts retain
-their fixed cell references, size, and presentation while validated cell-based anchors follow
-planned table movement.
+their fixed cell references, size, and presentation, and embedded PNG/JPEG pictures retain their
+media and picture presentation, while validated cell-based anchors follow planned table movement.
 
 The language uses Jinja-like tags inside ordinary cells:
 
@@ -142,5 +142,5 @@ Documentation:
 
 Affected formulas, conditional formatting, data validation, native Excel Tables, unsupported
 drawings, and other unsupported coordinate-dependent features are rejected explicitly rather than
-silently damaged. Template-authored charts use the fixed-reference profile documented in the
-specification and demonstrated by the maintained chart sample.
+silently damaged. Template-authored charts and embedded images use the planned-anchor profiles
+documented in the specification and demonstrated by maintained samples.

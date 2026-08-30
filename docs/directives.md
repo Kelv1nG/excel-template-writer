@@ -458,9 +458,26 @@ two-cell anchor receives one unambiguous translation from the completed layout. 
 growing `shift="cells"` lane stays where authored when its anchor is outside that lane. Absolute
 anchors stay fixed, and a two-cell anchor transformation that would resize the chart is rejected.
 Ordinary two-dimensional area, bar or column, line, pie, and scatter charts are supported. Chart
-sheets, pivot or combined charts, three-dimensional charts, images and shapes, external or named
-references, dynamic formulas, and native Excel Table structured references are rejected. Charts
-are never resized, repeated, or assigned a larger data range by rendering.
+sheets, pivot or combined charts, three-dimensional charts, shapes, external or named references,
+dynamic formulas, and native Excel Table structured references are rejected. Charts are never
+resized, repeated, or assigned a larger data range by rendering.
+
+## Template-authored images
+
+Embedded PNG and JPEG pictures already present on a worksheet are preserved without a template
+directive. Their original media bytes, size, offsets, picture formatting, descriptive metadata,
+and ordering relative to supported charts and other pictures remain authoritative.
+
+Cell-anchored pictures follow the completed layout. A picture below a default row-shifting table
+moves down with it. Under `shift="cells"`, a picture moves only when its anchor marker is inside the
+affected column lane; a picture beside the lane remains fixed. Absolute anchors remain fixed. A
+two-cell anchor must receive the same translation at both corners, because rendering does not resize
+pictures.
+
+Pictures are not repeated. If a repeat would copy an anchor, or a condition would remove it, the
+template is rejected. Linked images, unsupported formats, picture hyperlinks, vector fallbacks,
+worksheet backgrounds, header/footer pictures, shapes, and grouped drawings are not silently
+dropped; they are outside the supported profile.
 
 ## Common invalid templates
 
@@ -545,7 +562,7 @@ than `rows` or `cells` are rejected during compilation.
 | `E2105` | Conditional formatting would require an unsupported transform |
 | `E2106` | Data validation would require an unsupported transform |
 | `E2107` | Native Excel Table is unsupported by the current writer |
-| `E2108` | Image, shape, or another unsupported drawing object cannot be preserved |
+| `E2108` | Linked image, shape, or another unsupported drawing object cannot be preserved |
 | `E2109` | Hyperlink would be copied or moved |
 | `E2110` | Comment would be copied or moved |
 | `E2111` | Cell shifting would repeat a worksheet-wide custom row height |
@@ -553,6 +570,8 @@ than `rows` or `cells` are rejected during compilation.
 | `E2113` | Chart type is outside the supported worksheet-chart profile |
 | `E2114` | Chart formula is not a direct in-workbook A1 range |
 | `E2115` | Chart anchor is unsupported, removed, copied, or would require resizing |
+| `E2116` | Embedded image format is outside the supported PNG/JPEG profile |
+| `E2117` | Image anchor is unsupported, removed, copied, or would require resizing |
 | `E2201` | Compressed size, uncompressed size, or ZIP member count exceeded a package limit |
 | `E2202` | Workbook exceeded the configured worksheet-count limit |
 | `E3101` | Formula would require copying, movement, or translation |

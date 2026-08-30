@@ -75,8 +75,8 @@ The interpreter and layout layers must be testable without opening or saving an 
 - Language unit tests: normalization/adapters, canonical values, tokens, grammar, expressions,
   scopes, AST, and diagnostics.
 - Spatial tests: rectangle pairing, containment, ambiguity, nesting, measurement, shifting, and collisions.
-- Workbook integration tests: typed cells, styles, dimensions, merged ranges, supported charts, and
-  save/reload integrity.
+- Workbook integration tests: typed cells, styles, dimensions, merged ranges, supported ordered
+  chart/image drawings, embedded-media identity, and save/reload integrity.
 - Resource-limit tests: fail-fast context paths, pure-plan boundaries, package preflight, and
   unpublished oversized output.
 - End-to-end fixtures: only for representative user-visible behavior spanning all layers.
@@ -90,8 +90,8 @@ assert its stable diagnostic code and either its source location or canonical co
 - Keep source templates separate from generated outputs.
 - Generate programmatic fixtures through a documented helper once a test package exists.
 - Do not manually patch binary workbook contents.
-- Reopen rendered workbooks and verify values, types, styles, dimensions, merges, and supported
-  chart properties.
+- Reopen rendered workbooks and verify values, types, styles, dimensions, merges, supported chart
+  properties, image anchors, drawing order, and embedded-media bytes.
 - Inspect OOXML parts only when the public workbook model cannot prove the behavior.
 
 ## Maintained user samples

@@ -50,6 +50,7 @@ The language is declarative and Jinja-like, but its execution model is spatial. 
 - Native Excel Table creation or resizing
 - Pivot tables, pivot charts, slicers, macros, form controls, and unsupported drawing objects
 - Creating charts, resizing chart data ranges, or resizing and repeating chart anchors
+- Creating images from render data, repeating images, or resizing image anchors
 - A complete implementation of Jinja2
 - Automatic inference of repeat regions from blank cells, formatting, or worksheet used ranges
 - Automatic matching between displayed headers and input field names
@@ -238,7 +239,7 @@ Each AST node first reports its measured output size. Parent nodes then allocate
 
 The transformation is used consistently for cells, merges, row heights, column widths, and
 supported workbook objects whose individual feature contract requires coordinate transformation.
-Template-authored charts instead use the fixed-reference and planned-anchor policy in section 13.5.
+Template-authored charts and images use the planned-anchor policies in sections 13.5 and 13.6.
 
 ## 9. Data and type system
 
@@ -596,9 +597,9 @@ resize, contract, or split, rendering is rejected until that feature has its own
 plan representation.
 
 The same safety rule applies to other coordinate-dependent workbook objects. Native Excel Tables,
-images, shapes, and unsupported drawing objects or anchors are rejected by the first production
-adapter. The narrow template-authored chart profile in section 13.5 is the only supported drawing
-exception.
+shapes, and unsupported drawing objects or anchors are rejected by the first production adapter.
+The narrow template-authored chart and embedded-image profiles in sections 13.5 and 13.6 are the
+only supported drawing exceptions.
 Hyperlinks and comments are preserved only when their cell has exactly one unchanged destination;
 copying or moving them is rejected until an explicit policy is implemented.
 
@@ -638,8 +639,38 @@ anchor remains outside the lane.
 Chart style, axes, legend, titles, labels, blank-cell policy, and other state representable by the
 supported `openpyxl` chart object are preserved through save and reload. Chart value caches are not
 calculated by the renderer; consumers render the chart from its fixed worksheet references. A
-worksheet drawing part containing an image, shape, connector, unsupported graphic frame, or another
-unsupported drawing object is rejected rather than partially preserved.
+worksheet drawing part containing a shape, connector, unsupported graphic frame, or another
+unsupported drawing object is rejected rather than partially preserved. Supported pictures may
+share an ordered drawing part with supported charts under section 13.6.
+
+### 13.6 Template-authored worksheet images
+
+The first image profile preserves embedded pictures already authored on an ordinary worksheet.
+Rendering does not create pictures from context data, read filenames or URLs from expressions, or
+repeat one picture for every block instance. PNG and JPEG media embedded inside the XLSX package
+are supported. Linked or external pictures, SVG, GIF, BMP, TIFF, WMF, EMF, worksheet backgrounds,
+header/footer pictures, shapes, grouped drawings, and data-driven image directives are rejected or
+remain outside this profile.
+
+Image movement follows the same completed source-to-destination mapping used for chart anchors. An
+absolute anchor remains at its authored position. A one-cell anchor moves its marker to that source
+cell's sole planned destination while preserving its cell offset and physical extent. A two-cell
+anchor may translate only when both source markers have exactly one destination and both receive
+the same row and column delta. Different marker deltas would resize the picture and are rejected.
+
+An image below a growing `shift="rows"` block moves downward. Under `shift="cells"`, an image moves
+only when its cell marker lies in the affected column band; an image beside that band stays where
+authored. The marker coordinates, rather than the picture's visible pixel bounds, determine lane
+membership. An anchor marker removed by a condition or copied by a repeat is a validation error.
+Images are never copied per repeat instance.
+
+The adapter preserves the embedded media bytes, anchor type, marker offsets, physical extent,
+picture frame, cropping, rotation or flips, non-visual name and description, and lock/print flags
+that are representable by the supported DrawingML model. It preserves the original ordering of
+supported charts and pictures in each worksheet drawing so their stacking order is not silently
+regrouped by object type or anchor type. Extra drawing relationships such as picture hyperlinks,
+alternate vector representations, or other unsupported effects cause explicit rejection rather
+than partial preservation.
 
 ## 14. Conditions and advanced constructs
 
@@ -666,7 +697,7 @@ Potential later constructs:
 - grouping and subtotals
 - page-break controls
 - repeated print headers
-- images
+- data-driven image directives
 - sheet repetition
 
 These must be new AST node types, not special-case string replacement hooks.
@@ -894,7 +925,8 @@ Most layout tests should operate without `openpyxl`.
 ### 19.3 Workbook integration tests
 
 Fixture workbooks verify values, types, style IDs/semantics, dimensions, merges, formula
-rejection/preservation boundaries, fixed chart references, planned chart anchors, and package integrity after
+rejection/preservation boundaries, fixed chart references, planned chart/image anchors, embedded
+media bytes and drawing order, and package integrity after
 save/reload.
 
 Where workbook XML affects correctness, tests may inspect selected OOXML parts. XML manipulation is not the primary render strategy.
