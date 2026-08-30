@@ -14,6 +14,7 @@ SAMPLE_STEMS = (
     "cell_shift_lanes",
     "fixed_range_charts",
     "template_images",
+    "template_text_shapes",
     "regions",
     "polars_dataframe",
 )

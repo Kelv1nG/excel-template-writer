@@ -31,6 +31,7 @@ When the optional dependency is absent, the generator prints one Polars skip mes
 | `samples.cell_shift_lanes` | `cell_shift_lanes_template.xlsx`, `cell_shift_lanes_output.xlsx` | Side-by-side `shift="cells"` repeats with independently moving lanes and stationary neighboring cells |
 | `samples.fixed_range_charts` | `fixed_range_charts_template.xlsx`, `fixed_range_charts_output.xlsx` | Fixed nine-row chart references across a twelve-row repeat, including a stationary side chart plus charts pushed downward by whole-row and cell-lane expansion |
 | `samples.template_images` | `template_images_template.xlsx`, `template_images_output.xlsx` | Embedded PNG byte preservation plus stationary and downward-moving pictures under whole-row and isolated cell-lane expansion |
+| `samples.template_text_shapes` | `template_text_shapes_template.xlsx`, `template_text_shapes_output.xlsx` | Editable styled text boxes, callouts, and arrows; literal tag-like shape text; and stationary or downward-moving shapes under whole-row and isolated cell-lane expansion |
 | `samples.regions` | `regions_template.xlsx`, `regions_output.xlsx` | Explicit vertical regions, `shift="cells"`, `shift="rows"`, tallest-lane measurement, reserved source height, exact column bands, and nested regions |
 | `samples.polars_dataframe` | `polars_dataframe_template.xlsx`, `polars_dataframe_output.xlsx` | Explicit eager-Polars adapter, row-order preservation, typed values, and null/NaN normalization |
 
