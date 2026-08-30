@@ -48,7 +48,8 @@ The language is declarative and Jinja-like, but its execution model is spatial. 
 - Executing arbitrary Python or importing Python modules from a template
 - Calculating, copying, or translating Excel formulas
 - Native Excel Table creation or resizing
-- Pivot tables, slicers, macros, form controls, and unsupported drawing objects
+- Pivot tables, pivot charts, slicers, macros, form controls, and unsupported drawing objects
+- Creating charts, resizing chart data ranges, or resizing and repeating chart anchors
 - A complete implementation of Jinja2
 - Automatic inference of repeat regions from blank cells, formatting, or worksheet used ranges
 - Automatic matching between displayed headers and input field names
@@ -235,7 +236,9 @@ A later explicit `empty` branch may replace this default instance with content s
 
 Each AST node first reports its measured output size. Parent nodes then allocate destinations to children. This bottom-up measurement followed by top-down placement produces a coordinate transformation from source cells to output cells.
 
-The transformation is used consistently for cells, merges, row heights, column widths, and other supported workbook objects.
+The transformation is used consistently for cells, merges, row heights, column widths, and
+supported workbook objects whose individual feature contract requires coordinate transformation.
+Template-authored charts instead use the fixed-reference and planned-anchor policy in section 13.5.
 
 ## 9. Data and type system
 
@@ -593,9 +596,50 @@ resize, contract, or split, rendering is rejected until that feature has its own
 plan representation.
 
 The same safety rule applies to other coordinate-dependent workbook objects. Native Excel Tables,
-drawings, charts, images, and unsupported anchors are rejected by the first production adapter.
+images, shapes, and unsupported drawing objects or anchors are rejected by the first production
+adapter. The narrow template-authored chart profile in section 13.5 is the only supported drawing
+exception.
 Hyperlinks and comments are preserved only when their cell has exactly one unchanged destination;
 copying or moving them is rejected until an explicit policy is implemented.
+
+### 13.5 Template-authored worksheet charts
+
+The first chart profile preserves an existing chart authored on an ordinary worksheet. Rendering
+does not create a chart or infer categories, values, titles, series, or presentation from template
+data. The chart stored in the template remains authoritative.
+
+Chart data references are fixed output coordinates. Every chart formula must be one direct,
+concrete A1 cell or rectangular range on a worksheet in the same workbook. The adapter preserves
+that formula verbatim; it does not expand, contract, translate, or otherwise rewrite the range. For
+example, a chart authored against `A2:A10` and `B2:B10` continues to use those nine rows when a
+repeat renders more than nine items. Items after row 10 are rendered but not plotted. When fewer
+than nine items are rendered, the remaining referenced cells are blank and the chart's authored
+empty-cell display policy controls their presentation.
+
+The supported first profile is limited to ordinary two-dimensional area, bar or column, line, pie,
+and scatter charts with direct worksheet references. Multiple charts and multiple series are
+allowed. Chart sheets, pivot charts, combined charts, three-dimensional charts, external-workbook
+references, defined names, structured Excel Table references, and dynamic reference formulas are
+rejected. Native Excel Tables remain unsupported independently of chart use.
+
+Chart anchor movement follows the completed render plan while chart size remains fixed. An absolute
+anchor has no cell marker and remains at its authored position. A one-cell anchor moves its marker
+to that source cell's sole planned destination while retaining its offsets and extent. A two-cell
+anchor may translate when both source markers have exactly one destination and both destinations
+apply the same row and column delta; its marker offsets and size are retained. Different marker
+deltas would resize the chart and are rejected in this profile.
+
+An anchor marker that is removed or copied by a repeat, condition, region, or lane is a validation
+error. Charts are never copied per repeat instance. A chart below a growing table moves downward
+when its cell-based anchor is shifted by `shift="rows"`, or when its anchor lies in the affected
+band of a `shift="cells"` layout. A chart beside a cell-shift lane stays where authored when its
+anchor remains outside the lane.
+
+Chart style, axes, legend, titles, labels, blank-cell policy, and other state representable by the
+supported `openpyxl` chart object are preserved through save and reload. Chart value caches are not
+calculated by the renderer; consumers render the chart from its fixed worksheet references. A
+worksheet drawing part containing an image, shape, connector, unsupported graphic frame, or another
+unsupported drawing object is rejected rather than partially preserved.
 
 ## 14. Conditions and advanced constructs
 
@@ -640,6 +684,7 @@ Loads the source workbook into an immutable template model containing:
 - style references
 - row and column properties
 - merged ranges
+- supported template-authored charts and their planned anchors
 - supported workbook metadata
 
 The reader is the only layer directly coupled to `openpyxl` input objects.
@@ -848,7 +893,9 @@ Most layout tests should operate without `openpyxl`.
 
 ### 19.3 Workbook integration tests
 
-Fixture workbooks verify values, types, style IDs/semantics, dimensions, merges, formula rejection/preservation boundaries, and package integrity after save/reload.
+Fixture workbooks verify values, types, style IDs/semantics, dimensions, merges, formula
+rejection/preservation boundaries, fixed chart references, planned chart anchors, and package integrity after
+save/reload.
 
 Where workbook XML affects correctness, tests may inspect selected OOXML parts. XML manipulation is not the primary render strategy.
 
@@ -908,7 +955,7 @@ Completion of Phase 3 constitutes the first usable language release.
 
 - empty branches
 - grouping/subtotals as justified by real templates
-- optional images and other explicitly supported workbook features
+- additional explicitly supported workbook features
 
 ## 21. Resolved region design
 

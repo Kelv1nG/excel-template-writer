@@ -5,7 +5,9 @@ A spatial, declarative template interpreter for generating `.xlsx` workbooks.
 The current implementation compiles worksheets into a typed spatial AST, evaluates them into an
 adapter-neutral render plan, and applies the completed plan to a new `.xlsx` workbook through an
 `openpyxl` adapter. Direct cell formatting, formatted blanks, row and column dimensions, and merged
-ranges follow their source template cells.
+ranges follow their source template cells. Supported template-authored worksheet charts retain
+their fixed cell references, size, and presentation while validated cell-based anchors follow
+planned table movement.
 
 The language uses Jinja-like tags inside ordinary cells:
 
@@ -138,6 +140,7 @@ Documentation:
 - [`samples/README.md`](samples/README.md) — executable Python and template/output workbooks for
   every maintained feature group.
 
-Affected formulas, conditional formatting, data validation, native Excel Tables, drawings, and
-other unsupported coordinate-dependent features are rejected explicitly rather than silently
-damaged. See the specification and architecture guide for the current boundary.
+Affected formulas, conditional formatting, data validation, native Excel Tables, unsupported
+drawings, and other unsupported coordinate-dependent features are rejected explicitly rather than
+silently damaged. Template-authored charts use the fixed-reference profile documented in the
+specification and demonstrated by the maintained chart sample.

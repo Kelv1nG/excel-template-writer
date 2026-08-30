@@ -445,6 +445,23 @@ condition in a `shift="cells"` lane does not move unrelated neighboring columns.
 
 Nested blocks must be entirely inside one branch. A loop or condition cannot cross the boundary between the true and false rectangles.
 
+## Template-authored charts
+
+Charts are authored in Excel rather than created with a template directive. The supported profile
+keeps a worksheet chart's data formulas exactly as authored. A chart that references
+`A2:A10` and `B2:B10` continues to plot those nine rows when the table repeat renders twelve rows;
+the remaining three rows are written but are not plotted. If fewer rows are rendered, the unused
+referenced cells are blank and the chart's existing empty-cell setting controls their display.
+
+Use direct worksheet references. A chart below a growing table moves downward when its one-cell or
+two-cell anchor receives one unambiguous translation from the completed layout. A chart beside a
+growing `shift="cells"` lane stays where authored when its anchor is outside that lane. Absolute
+anchors stay fixed, and a two-cell anchor transformation that would resize the chart is rejected.
+Ordinary two-dimensional area, bar or column, line, pie, and scatter charts are supported. Chart
+sheets, pivot or combined charts, three-dimensional charts, images and shapes, external or named
+references, dynamic formulas, and native Excel Table structured references are rejected. Charts
+are never resized, repeated, or assigned a larger data range by rendering.
+
 ## Common invalid templates
 
 ### Opening tag after output content
@@ -528,10 +545,14 @@ than `rows` or `cells` are rejected during compilation.
 | `E2105` | Conditional formatting would require an unsupported transform |
 | `E2106` | Data validation would require an unsupported transform |
 | `E2107` | Native Excel Table is unsupported by the current writer |
-| `E2108` | Chart, image, or drawing anchor is unsupported by the current writer |
+| `E2108` | Image, shape, or another unsupported drawing object cannot be preserved |
 | `E2109` | Hyperlink would be copied or moved |
 | `E2110` | Comment would be copied or moved |
 | `E2111` | Cell shifting would repeat a worksheet-wide custom row height |
+| `E2112` | Chart sheet is unsupported |
+| `E2113` | Chart type is outside the supported worksheet-chart profile |
+| `E2114` | Chart formula is not a direct in-workbook A1 range |
+| `E2115` | Chart anchor is unsupported, removed, copied, or would require resizing |
 | `E2201` | Compressed size, uncompressed size, or ZIP member count exceeded a package limit |
 | `E2202` | Workbook exceeded the configured worksheet-count limit |
 | `E3101` | Formula would require copying, movement, or translation |

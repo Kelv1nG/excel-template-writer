@@ -414,8 +414,10 @@ The writer must consume the plan. It must not parse directives, evaluate express
 
 The adapter is implemented in [`xlsx/`](../src/excel_template_writer/xlsx). It snapshots every
 material cell, including styled blanks; copies direct cell formatting from each planned source;
-applies planned row properties and merges; writes atomically to a different path; and reloads the
-serialized package. [`../scratch/demo.py`](../scratch/demo.py) now exercises this production path.
+applies planned row properties and merges; preserves validated worksheet charts with fixed formulas
+and adapter-planned anchor translations; writes atomically to a different path; and reloads the
+serialized package.
+[`../scratch/demo.py`](../scratch/demo.py) exercises this production path.
 
 Before `openpyxl` loads a template, the adapter inspects ZIP metadata for compressed size, declared
 uncompressed size, member count, and workbook sheet count. The same inspection runs against the
@@ -429,7 +431,8 @@ The executable system currently supports vertical repeats, explicit vertical iso
 row/cell shifts, scalar output, a small safe expression language with deterministic date-to-text
 formatting and numeric summation, empty repeat placeholders,
 nested regions, stacked conditions, direct
-cell formatting, styled blanks, row/column properties, merged ranges, immutable context
+cell formatting, styled blanks, row/column properties, merged ranges, fixed-reference
+template-authored worksheet charts, immutable context
 normalization, caller-supplied type adapters, deterministic resource limits, and XLSX package
 preflight.
 
@@ -442,7 +445,8 @@ It does not yet provide:
 - an `{% empty %}` repeat branch;
 - bundled pandas, Arrow, DuckDB, ORM, or other library-specific adapters beyond the current eager
   Polars `DataFrame` integration;
-- transformation of conditional formatting, data validation, native Excel Tables, drawings,
-  hyperlinks, or comments when their coordinates would change.
+- transformation of conditional formatting, data validation, native Excel Tables, chart formulas,
+  chart-anchor resizing, hyperlinks, or comments when their coordinates would change;
+- images, shapes, chart sheets, pivot or combined charts, and other unsupported drawings.
 
 These are extension points, not invitations to special-case the renderer. A new semantic feature should update the specification and then flow through parsing, a typed AST node, validation, evaluation/layout, diagnostics, and focused tests.
