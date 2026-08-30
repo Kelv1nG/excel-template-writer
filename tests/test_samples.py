@@ -13,6 +13,7 @@ SAMPLE_STEMS = (
     "conditions_and_nesting",
     "cell_shift_lanes",
     "fixed_range_charts",
+    "template_images",
     "regions",
     "polars_dataframe",
 )

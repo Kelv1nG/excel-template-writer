@@ -12,6 +12,7 @@ from samples import (
     regions,
     repeated_blocks,
     scalar_values,
+    template_images,
 )
 
 
@@ -45,6 +46,7 @@ def main() -> None:
         ),
         _run_sample(cell_shift_lanes.build_template, cell_shift_lanes.render_sample),
         _run_sample(fixed_range_charts.build_template, fixed_range_charts.render_sample),
+        _run_sample(template_images.build_template, template_images.render_sample),
         _run_sample(regions.build_template, regions.render_sample),
     ]
     try:
