@@ -4,23 +4,27 @@ from __future__ import annotations
 
 import os
 import tempfile
-from copy import copy
+from copy import copy, deepcopy
 from pathlib import Path
+from typing import Any
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.cell.cell import Cell
+from openpyxl.drawing.spreadsheet_drawing import AbsoluteAnchor, OneCellAnchor, TwoCellAnchor
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.dimensions import ColumnDimension, RowDimension
 from openpyxl.worksheet.worksheet import Worksheet
 
 from excel_template_writer.diagnostics import TemplateRenderError
 from excel_template_writer.limits import ResourceLimits
+from excel_template_writer.model import Coordinate
 from excel_template_writer.render import RenderPlan
 from excel_template_writer.xlsx.model import (
     CellPresentation,
     ColumnPresentation,
     DimensionPresentation,
     RowPresentation,
+    SheetFeaturePlan,
     SheetSnapshot,
     WorkbookSnapshot,
 )
@@ -127,13 +131,48 @@ def _is_identity_plan(source: SheetSnapshot, plan: RenderPlan) -> bool:
     )
 
 
-def _write_sheet(destination: Worksheet, source: SheetSnapshot, plan: RenderPlan) -> None:
+def _apply_chart_anchor(chart: Any, planned_coordinates: tuple[Coordinate, ...]) -> None:
+    """Apply one prevalidated anchor translation to a detached chart.
+
+    Args:
+        chart: Mutable openpyxl chart copy.
+        planned_coordinates: Destination coordinates for its cell anchor markers.
+
+    Raises:
+        RuntimeError: If the validated anchor and feature plan disagree.
+    """
+
+    anchor = chart.anchor
+    if isinstance(anchor, AbsoluteAnchor):
+        if planned_coordinates:
+            raise RuntimeError("absolute chart anchor unexpectedly has cell markers")
+        return
+    if isinstance(anchor, OneCellAnchor):
+        markers = (anchor._from,)
+    elif isinstance(anchor, TwoCellAnchor):
+        markers = (anchor._from, anchor.to)
+    else:
+        raise RuntimeError("unsupported chart anchor reached the workbook writer")
+    if len(markers) != len(planned_coordinates):
+        raise RuntimeError("chart anchor marker count does not match its feature plan")
+    for marker, coordinate in zip(markers, planned_coordinates, strict=True):
+        marker.row = coordinate.row - 1
+        marker.col = coordinate.column - 1
+
+
+def _write_sheet(
+    destination: Worksheet,
+    source: SheetSnapshot,
+    plan: RenderPlan,
+    feature_plan: SheetFeaturePlan,
+) -> None:
     """Apply one complete validated plan to a new worksheet.
 
     Args:
         destination: Empty mutable destination worksheet.
         source: Detached source worksheet state.
         plan: Complete adapter-neutral render plan.
+        feature_plan: Validated adapter plan for charts and other workbook features.
     """
 
     destination.sheet_view.showGridLines = source.show_grid_lines
@@ -152,6 +191,8 @@ def _write_sheet(destination: Worksheet, source: SheetSnapshot, plan: RenderPlan
             _apply_row(destination.row_dimensions[planned_row.destination_row], presentation)
 
     for planned_cell in plan.cells:
+        if planned_cell.source_coordinate in source.synthetic_chart_anchor_cells:
+            continue
         presentation = source.cells[planned_cell.source_coordinate]
         cell = destination.cell(planned_cell.coordinate.row, planned_cell.coordinate.column)
         _apply_cell(cell, presentation, planned_cell.value)
@@ -164,6 +205,15 @@ def _write_sheet(destination: Worksheet, source: SheetSnapshot, plan: RenderPlan
             end_column=merge.rectangle.right,
         )
 
+    for source_chart, planned_chart in zip(
+        source.charts,
+        feature_plan.charts,
+        strict=True,
+    ):
+        chart = deepcopy(source_chart.chart)
+        _apply_chart_anchor(chart, planned_chart.anchor_coordinates)
+        destination.add_chart(chart)
+
     if _is_identity_plan(source, plan):
         destination.conditional_formatting = copy(source.conditional_formatting)
         destination.data_validations = copy(source.data_validations)
@@ -173,6 +223,7 @@ def _write_sheet(destination: Worksheet, source: SheetSnapshot, plan: RenderPlan
 def write_workbook(
     snapshot: WorkbookSnapshot,
     plans: tuple[RenderPlan, ...],
+    feature_plans: tuple[SheetFeaturePlan, ...],
     output_path: str | Path,
     *,
     limits: ResourceLimits,
@@ -182,6 +233,7 @@ def write_workbook(
     Args:
         snapshot: Detached source workbook state.
         plans: One complete render plan per source worksheet.
+        feature_plans: One validated workbook-feature plan per source worksheet.
         output_path: Destination path, which must differ from the template path.
         limits: Package ceilings checked before publication.
 
@@ -198,9 +250,14 @@ def write_workbook(
     workbook.remove(workbook.active)
     workbook.properties = copy(snapshot.properties)
     workbook.loaded_theme = snapshot.loaded_theme
-    for sheet, plan in zip(snapshot.sheets, plans, strict=True):
+    for sheet, plan, feature_plan in zip(
+        snapshot.sheets,
+        plans,
+        feature_plans,
+        strict=True,
+    ):
         destination = workbook.create_sheet(sheet.template.name)
-        _write_sheet(destination, sheet, plan)
+        _write_sheet(destination, sheet, plan, feature_plan)
 
     handle, temporary_name = tempfile.mkstemp(suffix=".xlsx", dir=path.parent)
     os.close(handle)

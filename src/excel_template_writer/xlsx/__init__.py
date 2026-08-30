@@ -18,9 +18,10 @@ from excel_template_writer.diagnostics import (
 from excel_template_writer.limits import DEFAULT_RESOURCE_LIMITS, ResourceLimits
 from excel_template_writer.render import RenderPlan, render_sheet
 from excel_template_writer.values import TypeAdapter, normalize_context
+from excel_template_writer.xlsx.model import SheetFeaturePlan
 from excel_template_writer.xlsx.package_limits import inspect_xlsx_package
 from excel_template_writer.xlsx.reader import read_workbook
-from excel_template_writer.xlsx.validation import validate_sheet_features
+from excel_template_writer.xlsx.validation import plan_sheet_features
 from excel_template_writer.xlsx.writer import write_workbook
 
 
@@ -97,7 +98,8 @@ def render_workbook(
     ).require()
 
     snapshot = read_workbook(source_path)
-    if len(snapshot.sheets) > limits.max_worksheets:
+    total_sheets = len(snapshot.sheets) + len(snapshot.chartsheets)
+    if total_sheets > limits.max_worksheets:
         raise TemplateCompilationError(
             (
                 Diagnostic(
@@ -107,7 +109,19 @@ def render_workbook(
                 ),
             )
         )
+    if snapshot.chartsheets:
+        raise TemplateCompilationError(
+            (
+                Diagnostic(
+                    DiagnosticCode.CHARTSHEET_UNSUPPORTED,
+                    "chart sheets are not supported; embed the chart in a worksheet",
+                    SourceLocation(snapshot.chartsheets[0], "A1"),
+                ),
+            )
+        )
+    worksheet_names = frozenset(sheet.template.name for sheet in snapshot.sheets)
     plans: list[RenderPlan] = []
+    feature_plans: list[SheetFeaturePlan] = []
     diagnostics: list[Diagnostic] = []
     planned_cells = 0
     resource_codes = {
@@ -138,16 +152,26 @@ def render_workbook(
                     ),
                 )
             )
-        diagnostics.extend(validate_sheet_features(sheet, compilation.compiled, rendering.plan))
+        feature_plan, feature_diagnostics = plan_sheet_features(
+            sheet,
+            compilation.compiled,
+            rendering.plan,
+            worksheet_names=worksheet_names,
+        )
+        feature_plans.append(feature_plan)
+        diagnostics.extend(feature_diagnostics)
         plans.append(rendering.plan)
     if diagnostics:
         raise TemplateCompilationError(diagnostics)
     if len(plans) != len(snapshot.sheets):
         raise RuntimeError("internal error: not every worksheet produced a render plan")
+    if len(feature_plans) != len(snapshot.sheets):
+        raise RuntimeError("internal error: not every worksheet produced a feature plan")
 
     written_path = write_workbook(
         snapshot,
         tuple(plans),
+        tuple(feature_plans),
         destination_path,
         limits=limits,
     )

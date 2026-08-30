@@ -51,6 +51,33 @@ class ColumnPresentation(DimensionPresentation):
 
 
 @dataclass(frozen=True)
+class ChartSnapshot:
+    chart: Any
+    chart_type: str
+    anchor_coordinates: tuple[Coordinate, ...]
+    references: tuple[str, ...]
+    has_supported_type: bool
+    has_supported_anchor: bool
+    is_combined: bool
+    is_pivot: bool
+
+
+@dataclass(frozen=True)
+class PlannedChart:
+    anchor_coordinates: tuple[Coordinate, ...]
+
+
+@dataclass(frozen=True)
+class SheetFeaturePlan:
+    charts: tuple[PlannedChart, ...]
+
+    def __post_init__(self) -> None:
+        """Normalize planned chart collections to immutable tuples."""
+
+        object.__setattr__(self, "charts", tuple(self.charts))
+
+
+@dataclass(frozen=True)
 class SheetSnapshot:
     template: WorksheetTemplate
     cells: Mapping[Coordinate, CellPresentation]
@@ -70,7 +97,9 @@ class SheetSnapshot:
     has_conditional_formatting: bool
     has_data_validations: bool
     has_tables: bool
-    has_drawings: bool
+    charts: tuple[ChartSnapshot, ...]
+    synthetic_chart_anchor_cells: frozenset[Coordinate]
+    has_unsupported_drawings: bool
 
     def __post_init__(self) -> None:
         """Detach mutable presentation, row, and column mappings."""
@@ -78,10 +107,17 @@ class SheetSnapshot:
         object.__setattr__(self, "cells", MappingProxyType(dict(self.cells)))
         object.__setattr__(self, "rows", MappingProxyType(dict(self.rows)))
         object.__setattr__(self, "columns", MappingProxyType(dict(self.columns)))
+        object.__setattr__(self, "charts", tuple(self.charts))
+        object.__setattr__(
+            self,
+            "synthetic_chart_anchor_cells",
+            frozenset(self.synthetic_chart_anchor_cells),
+        )
 
 
 @dataclass(frozen=True)
 class WorkbookSnapshot:
     sheets: tuple[SheetSnapshot, ...]
+    chartsheets: tuple[str, ...]
     properties: Any
     loaded_theme: bytes | None

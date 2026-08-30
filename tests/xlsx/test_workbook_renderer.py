@@ -1,14 +1,20 @@
 from __future__ import annotations
 
+import base64
 from dataclasses import replace
 from datetime import date, datetime, time
 from decimal import Decimal
 from pathlib import Path
+from typing import Any, cast
+from xml.etree import ElementTree
 from zipfile import ZipFile
 
 import pytest
 from openpyxl import Workbook, load_workbook
+from openpyxl.chart import BarChart, DoughnutChart, LineChart, Reference
 from openpyxl.comments import Comment
+from openpyxl.drawing.image import Image
+from openpyxl.drawing.spreadsheet_drawing import AnchorMarker, OneCellAnchor, TwoCellAnchor
 from openpyxl.formatting.rule import CellIsRule
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Protection, Side
 from openpyxl.worksheet.datavalidation import DataValidation
@@ -24,6 +30,23 @@ from excel_template_writer.values import TypeAdapter
 from excel_template_writer.xlsx import render_workbook
 
 
+class _StaticPngImage(Image):
+    def __init__(self) -> None:
+        """Create a Pillow-independent image for unsupported-drawing tests."""
+
+        self.width = 1
+        self.height = 1
+        self.format = "png"
+
+    def _data(self) -> bytes:
+        """Return one valid one-pixel PNG payload."""
+
+        return base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUB"
+            "AScY42YAAAAASUVORK5CYII="
+        )
+
+
 def _save(workbook: Workbook, path: Path) -> Path:
     workbook.save(path)
     return path
@@ -32,6 +55,25 @@ def _save(workbook: Workbook, path: Path) -> Path:
 def _uncompressed_size(path: Path) -> int:
     with ZipFile(path) as archive:
         return sum(member.file_size for member in archive.infolist())
+
+
+def _chart_references(chart: Any) -> set[str]:
+    tree = chart._write()
+    return {
+        element.text
+        for element in tree.iter()
+        if element.tag.rsplit("}", 1)[-1] == "f" and element.text
+    }
+
+
+def _chart_style(path: Path, part: str = "chart1.xml") -> str | None:
+    with ZipFile(path) as archive:
+        root = ElementTree.fromstring(archive.read(f"xl/charts/{part}"))
+    style = next(
+        (element for element in root.iter() if element.tag.rsplit("}", 1)[-1] == "style"),
+        None,
+    )
+    return None if style is None else style.get("val")
 
 
 def test_render_workbook_normalizes_adapter_values_once_for_all_sheets(
@@ -471,6 +513,271 @@ def test_preserves_unaffected_formula_and_conditional_formatting(tmp_path: Path)
         assert len(sheet.conditional_formatting) == 1
     finally:
         rendered.close()
+
+
+def test_preserves_fixed_chart_references_when_a_cell_shift_repeat_exceeds_them(
+    tmp_path: Path,
+) -> None:
+    template_path = tmp_path / "fixed-chart-template.xlsx"
+    output_path = tmp_path / "fixed-chart-output.xlsx"
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Sales"
+    sheet["A1"] = "Identifier"
+    sheet["B1"] = "Value"
+    sheet["A2"] = '{% for item in items shift="cells" %}{{ item.identifier }}'
+    sheet["B2"] = "{{ item.value }}{% endfor %}"
+    chart = BarChart()
+    chart.type = "col"
+    chart.style = 10
+    chart.title = "First nine items"
+    chart.display_blanks = "gap"
+    chart.add_data(
+        Reference(sheet, min_col=2, min_row=1, max_row=10),
+        titles_from_data=True,
+    )
+    chart.set_categories(Reference(sheet, min_col=1, min_row=2, max_row=10))
+    sheet.add_chart(chart, "D2")
+    _save(workbook, template_path)
+
+    render_workbook(
+        template_path,
+        output_path,
+        {"items": [{"identifier": f"Item {index}", "value": index * 10} for index in range(1, 13)]},
+    )
+
+    rendered = load_workbook(output_path)
+    try:
+        sheet = rendered["Sales"]
+        assert [sheet[f"A{row}"].value for row in range(2, 14)] == [
+            f"Item {index}" for index in range(1, 13)
+        ]
+        assert len(sheet._charts) == 1
+        rendered_chart = sheet._charts[0]
+        assert type(rendered_chart) is BarChart
+        assert rendered_chart.display_blanks == "gap"
+        assert isinstance(rendered_chart.anchor, OneCellAnchor)
+        assert (rendered_chart.anchor._from.row, rendered_chart.anchor._from.col) == (1, 3)
+        assert _chart_references(rendered_chart) == {
+            "'Sales'!B1",
+            "'Sales'!$A$2:$A$10",
+            "'Sales'!$B$2:$B$10",
+        }
+        assert _chart_style(template_path) == "10"
+        assert _chart_style(output_path) == "10"
+    finally:
+        rendered.close()
+
+
+def test_moves_chart_anchor_down_with_row_expansion(tmp_path: Path) -> None:
+    template_path = tmp_path / "moving-chart-template.xlsx"
+    output_path = tmp_path / "moving-chart-output.xlsx"
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet["A1"] = "{% for item in items %}{{ item }}"
+    sheet["B1"] = "{% endfor %}"
+    chart = BarChart()
+    chart.add_data(Reference(sheet, min_col=1, min_row=1, max_row=1))
+    sheet.add_chart(chart, "D3")
+    _save(workbook, template_path)
+
+    render_workbook(template_path, output_path, {"items": [1, 2]})
+
+    rendered = load_workbook(output_path)
+    try:
+        rendered_chart = rendered.active._charts[0]
+        assert isinstance(rendered_chart.anchor, OneCellAnchor)
+        assert (rendered_chart.anchor._from.row, rendered_chart.anchor._from.col) == (3, 3)
+        assert _chart_references(rendered_chart) == {"'Sheet'!$A$1"}
+    finally:
+        rendered.close()
+
+
+def test_moves_chart_anchor_down_inside_cell_shift_lane(tmp_path: Path) -> None:
+    template_path = tmp_path / "cell-shift-chart-template.xlsx"
+    output_path = tmp_path / "cell-shift-chart-output.xlsx"
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet["A1"] = '{% for item in items shift="cells" %}{{ item }}'
+    sheet["B1"] = "{% endfor %}"
+    chart = BarChart()
+    chart.add_data(Reference(sheet, min_col=1, min_row=1, max_row=1))
+    sheet.add_chart(chart, "A4")
+    _save(workbook, template_path)
+
+    render_workbook(template_path, output_path, {"items": [1, 2, 3]})
+
+    rendered = load_workbook(output_path)
+    try:
+        rendered_chart = rendered.active._charts[0]
+        assert isinstance(rendered_chart.anchor, OneCellAnchor)
+        assert (rendered_chart.anchor._from.row, rendered_chart.anchor._from.col) == (5, 0)
+        assert _chart_references(rendered_chart) == {"'Sheet'!$A$1"}
+    finally:
+        rendered.close()
+
+
+def test_translates_two_cell_chart_anchor_without_resizing(tmp_path: Path) -> None:
+    template_path = tmp_path / "two-cell-chart-template.xlsx"
+    output_path = tmp_path / "two-cell-chart-output.xlsx"
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet["A1"] = "{% for item in items %}{{ item }}"
+    sheet["B1"] = "{% endfor %}"
+    chart = BarChart()
+    chart.add_data(Reference(sheet, min_col=1, min_row=1, max_row=1))
+    cast(Any, chart).anchor = TwoCellAnchor(
+        _from=AnchorMarker(col=3, row=2),
+        to=AnchorMarker(col=8, row=12),
+    )
+    sheet.add_chart(chart)
+    _save(workbook, template_path)
+
+    render_workbook(template_path, output_path, {"items": [1, 2]})
+
+    rendered = load_workbook(output_path)
+    try:
+        rendered_chart = rendered.active._charts[0]
+        assert isinstance(rendered_chart.anchor, TwoCellAnchor)
+        assert (rendered_chart.anchor._from.row, rendered_chart.anchor._from.col) == (3, 3)
+        assert (rendered_chart.anchor.to.row, rendered_chart.anchor.to.col) == (13, 8)
+    finally:
+        rendered.close()
+
+
+def test_rejects_chart_anchor_copied_by_repeat(tmp_path: Path) -> None:
+    template_path = tmp_path / "copied-chart-anchor-template.xlsx"
+    output_path = tmp_path / "should-not-exist.xlsx"
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet["A1"] = "{% for item in items %}{{ item }}"
+    sheet["B1"] = "{% endfor %}"
+    chart = BarChart()
+    chart.add_data(Reference(sheet, min_col=1, min_row=1, max_row=1))
+    sheet.add_chart(chart, "A1")
+    _save(workbook, template_path)
+
+    with pytest.raises(TemplateCompilationError) as caught:
+        render_workbook(template_path, output_path, {"items": [1, 2]})
+
+    assert DiagnosticCode.CHART_ANCHOR_REQUIRES_UNSUPPORTED_TRANSFORM in {
+        diagnostic.code for diagnostic in caught.value.diagnostics
+    }
+    assert not output_path.exists()
+
+
+def test_rejects_two_cell_chart_anchor_resize(tmp_path: Path) -> None:
+    template_path = tmp_path / "resized-chart-anchor-template.xlsx"
+    output_path = tmp_path / "should-not-exist.xlsx"
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet["A2"] = "{% for item in items %}{{ item }}"
+    sheet["B2"] = "{% endfor %}"
+    chart = BarChart()
+    chart.add_data(Reference(sheet, min_col=1, min_row=2, max_row=2))
+    cast(Any, chart).anchor = TwoCellAnchor(
+        _from=AnchorMarker(col=3, row=0),
+        to=AnchorMarker(col=8, row=3),
+    )
+    sheet.add_chart(chart)
+    _save(workbook, template_path)
+
+    with pytest.raises(TemplateCompilationError) as caught:
+        render_workbook(template_path, output_path, {"items": [1, 2]})
+
+    assert DiagnosticCode.CHART_ANCHOR_REQUIRES_UNSUPPORTED_TRANSFORM in {
+        diagnostic.code for diagnostic in caught.value.diagnostics
+    }
+    assert not output_path.exists()
+
+
+def test_preserves_distinct_styles_for_multiple_charts(tmp_path: Path) -> None:
+    template_path = tmp_path / "multiple-chart-template.xlsx"
+    output_path = tmp_path / "multiple-chart-output.xlsx"
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet["A1"] = "{{ value }}"
+    for chart_type, style, anchor in (
+        (BarChart, 10, "D2"),
+        (LineChart, 11, "D20"),
+    ):
+        chart = chart_type()
+        chart.style = style
+        chart.add_data(Reference(sheet, min_col=1, min_row=1, max_row=1))
+        sheet.add_chart(chart, anchor)
+    _save(workbook, template_path)
+
+    render_workbook(template_path, output_path, {"value": 42})
+
+    rendered = load_workbook(output_path)
+    try:
+        assert [type(chart) for chart in rendered.active._charts] == [BarChart, LineChart]
+        assert [_chart_references(chart) for chart in rendered.active._charts] == [
+            {"'Sheet'!$A$1"},
+            {"'Sheet'!$A$1"},
+        ]
+        assert _chart_style(output_path, "chart1.xml") == "10"
+        assert _chart_style(output_path, "chart2.xml") == "11"
+    finally:
+        rendered.close()
+
+
+def test_rejects_unsupported_chart_type_and_reference(tmp_path: Path) -> None:
+    template_path = tmp_path / "unsupported-chart-template.xlsx"
+    output_path = tmp_path / "should-not-exist.xlsx"
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet["A1"] = "Value"
+    chart = DoughnutChart()
+    chart.add_data(Reference(sheet, min_col=1, min_row=1, max_row=1))
+    chart.series[0].val.numRef.f = "DefinedChartRange"
+    sheet.add_chart(chart, "C1")
+    _save(workbook, template_path)
+
+    with pytest.raises(TemplateCompilationError) as caught:
+        render_workbook(template_path, output_path, {})
+
+    assert {
+        DiagnosticCode.CHART_TYPE_UNSUPPORTED,
+        DiagnosticCode.CHART_REFERENCE_UNSUPPORTED,
+    } <= {diagnostic.code for diagnostic in caught.value.diagnostics}
+    assert not output_path.exists()
+
+
+def test_rejects_image_drawing_instead_of_silently_dropping_it(tmp_path: Path) -> None:
+    template_path = tmp_path / "image-template.xlsx"
+    output_path = tmp_path / "should-not-exist.xlsx"
+    workbook = Workbook()
+    workbook.active.add_image(_StaticPngImage(), "C1")
+    _save(workbook, template_path)
+
+    with pytest.raises(TemplateCompilationError) as caught:
+        render_workbook(template_path, output_path, {})
+
+    assert DiagnosticCode.DRAWING_REQUIRES_UNSUPPORTED_TRANSFORM in {
+        diagnostic.code for diagnostic in caught.value.diagnostics
+    }
+    assert not output_path.exists()
+
+
+def test_rejects_chartsheet(tmp_path: Path) -> None:
+    template_path = tmp_path / "chartsheet-template.xlsx"
+    output_path = tmp_path / "should-not-exist.xlsx"
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet["A1"] = 10
+    chart = BarChart()
+    chart.add_data(Reference(sheet, min_col=1, min_row=1, max_row=1))
+    workbook.create_chartsheet("Chart only").add_chart(chart)
+    _save(workbook, template_path)
+
+    with pytest.raises(TemplateCompilationError) as caught:
+        render_workbook(template_path, output_path, {})
+
+    assert [diagnostic.code for diagnostic in caught.value.diagnostics] == [
+        DiagnosticCode.CHARTSHEET_UNSUPPORTED
+    ]
+    assert not output_path.exists()
 
 
 def test_runtime_string_that_starts_with_equals_remains_text(tmp_path: Path) -> None:
