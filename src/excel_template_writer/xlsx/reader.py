@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import posixpath
+import warnings
 from collections.abc import Iterable
 from copy import copy, deepcopy
 from dataclasses import dataclass
@@ -31,6 +32,7 @@ from excel_template_writer.xlsx.model import (
     ImageSnapshot,
     RowPresentation,
     SheetSnapshot,
+    TextShapeSnapshot,
     WorkbookSnapshot,
 )
 
@@ -49,6 +51,13 @@ _PACKAGE_RELATIONSHIP_NAMESPACE = "http://schemas.openxmlformats.org/package/200
 _SUPPORTED_CHART_TYPES = (AreaChart, BarChart, LineChart, PieChart, ScatterChart)
 _SUPPORTED_ANCHOR_TYPES = (AbsoluteAnchor, OneCellAnchor, TwoCellAnchor)
 _SUPPORTED_IMAGE_FORMATS = frozenset({"jpeg", "jpg", "png"})
+_SUPPORTED_ANCHOR_TAGS = frozenset(
+    {
+        f"{{{_DRAWING_NAMESPACE}}}absoluteAnchor",
+        f"{{{_DRAWING_NAMESPACE}}}oneCellAnchor",
+        f"{{{_DRAWING_NAMESPACE}}}twoCellAnchor",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -110,6 +119,95 @@ def _normalized_part_target(source_part: str, target: str) -> str:
     if target.startswith("/"):
         return target.lstrip("/")
     return posixpath.normpath(posixpath.join(posixpath.dirname(source_part), target))
+
+
+def _text_shape_relationship_ids(shape: ElementTree.Element) -> frozenset[str]:
+    """Collect package relationship IDs referenced anywhere inside one shape.
+
+    Args:
+        shape: Raw ``xdr:sp`` element to inspect.
+
+    Returns:
+        Every non-empty relationship attribute value in the shape subtree.
+    """
+
+    relationship_prefix = f"{{{_OFFICE_RELATIONSHIP_NAMESPACE}}}"
+    return frozenset(
+        value
+        for element in shape.iter()
+        for attribute, value in element.attrib.items()
+        if attribute.startswith(relationship_prefix) and value
+    )
+
+
+def _has_supported_text_shape_content(shape: ElementTree.Element) -> bool:
+    """Return whether one ``xdr:sp`` fits the static text-shape profile.
+
+    Args:
+        shape: Raw DrawingML shape element to classify.
+
+    Returns:
+        ``True`` when the shape contains one static relationship-free text body.
+    """
+
+    text_bodies = shape.findall(_qualified_name(_DRAWING_NAMESPACE, "txBody"))
+    if len(text_bodies) != 1:
+        return False
+    if shape.get("macro") or shape.get("textlink"):
+        return False
+    if _text_shape_relationship_ids(shape):
+        return False
+    rejected_tags = {
+        _qualified_name(_DRAWING_MAIN_NAMESPACE, "blip"),
+        _qualified_name(_DRAWING_MAIN_NAMESPACE, "blipFill"),
+        _qualified_name(_DRAWING_MAIN_NAMESPACE, "fld"),
+        _qualified_name(_DRAWING_MAIN_NAMESPACE, "hlinkClick"),
+        _qualified_name(_DRAWING_MAIN_NAMESPACE, "hlinkHover"),
+        _qualified_name(_DRAWING_MAIN_NAMESPACE, "prstTxWarp"),
+    }
+    for descendant in shape.iter():
+        if descendant.tag in rejected_tags:
+            return False
+        if descendant.get("fromWordArt", "").lower() in {"1", "true", "on"}:
+            return False
+    return True
+
+
+def _raw_anchor_coordinates(
+    anchor: ElementTree.Element,
+) -> tuple[tuple[Coordinate, ...], bool]:
+    """Read cell markers without asking openpyxl to deserialize shape content.
+
+    Args:
+        anchor: Raw DrawingML absolute, one-cell, two-cell, or unsupported anchor.
+
+    Returns:
+        Parsed one-based cell markers and whether the anchor is structurally supported.
+    """
+
+    if anchor.tag == _qualified_name(_DRAWING_NAMESPACE, "absoluteAnchor"):
+        return (), True
+    marker_names: tuple[str, ...]
+    if anchor.tag == _qualified_name(_DRAWING_NAMESPACE, "oneCellAnchor"):
+        marker_names = ("from",)
+    elif anchor.tag == _qualified_name(_DRAWING_NAMESPACE, "twoCellAnchor"):
+        marker_names = ("from", "to")
+    else:
+        return (), False
+    coordinates: list[Coordinate] = []
+    try:
+        for marker_name in marker_names:
+            marker = anchor.find(_qualified_name(_DRAWING_NAMESPACE, marker_name))
+            if marker is None:
+                return (), False
+            row = marker.find(_qualified_name(_DRAWING_NAMESPACE, "row"))
+            column = marker.find(_qualified_name(_DRAWING_NAMESPACE, "col"))
+            if row is None or row.text is None or column is None or column.text is None:
+                return (), False
+            coordinates.append(Coordinate(int(row.text) + 1, int(column.text) + 1))
+    except ValueError:
+        return (), False
+    return tuple(coordinates), True
 
 
 def _drawing_relationships(
@@ -273,8 +371,7 @@ def _drawing_profiles(path: Path) -> dict[str, _DrawingPartProfile]:
             if not anchors:
                 has_unsupported = True
             for anchor_element in anchors:
-                anchor = _parse_anchor(anchor_element)
-                if anchor is None:
+                if anchor_element.tag not in _SUPPORTED_ANCHOR_TAGS:
                     has_unsupported = True
                     continue
                 object_children: list[ElementTree.Element] = []
@@ -292,6 +389,32 @@ def _drawing_profiles(path: Path) -> dict[str, _DrawingPartProfile]:
                     has_unsupported = True
                     continue
                 drawing_object = object_children[0]
+                if drawing_object.tag == _qualified_name(_DRAWING_NAMESPACE, "sp"):
+                    anchor_coordinates, has_supported_anchor = _raw_anchor_coordinates(
+                        anchor_element
+                    )
+                    relationship_ids = _text_shape_relationship_ids(drawing_object)
+                    used_relationship_ids.update(
+                        relationship_id
+                        for relationship_id in relationship_ids
+                        if relationship_id in relationships
+                    )
+                    drawings.append(
+                        TextShapeSnapshot(
+                            anchor_xml=ElementTree.tostring(
+                                anchor_element,
+                                encoding="utf-8",
+                            ),
+                            anchor_coordinates=anchor_coordinates,
+                            has_supported_content=_has_supported_text_shape_content(drawing_object),
+                            has_supported_anchor=has_supported_anchor,
+                        )
+                    )
+                    continue
+                anchor = _parse_anchor(anchor_element)
+                if anchor is None:
+                    has_unsupported = True
+                    continue
                 if drawing_object.tag == _qualified_name(_DRAWING_NAMESPACE, "graphicFrame"):
                     chart_elements = [
                         descendant
@@ -644,7 +767,17 @@ def read_workbook(path: str | Path) -> WorkbookSnapshot:
 
     source_path = Path(path)
     drawing_profiles = _drawing_profiles(source_path)
-    workbook = load_workbook(source_path, data_only=False, keep_links=False)
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message=(
+                r"DrawingML support is incomplete and limited to charts and images only\. "
+                r"Shapes and drawings will be lost\."
+            ),
+            category=UserWarning,
+            module="openpyxl.reader.drawings",
+        )
+        workbook = load_workbook(source_path, data_only=False, keep_links=False)
     try:
         return WorkbookSnapshot(
             sheets=tuple(_read_sheet(sheet, drawing_profiles) for sheet in workbook.worksheets),

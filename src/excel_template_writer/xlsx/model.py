@@ -72,7 +72,15 @@ class ImageSnapshot:
     has_supported_anchor: bool
 
 
-DrawingSnapshot = ChartSnapshot | ImageSnapshot
+@dataclass(frozen=True)
+class TextShapeSnapshot:
+    anchor_xml: bytes
+    anchor_coordinates: tuple[Coordinate, ...]
+    has_supported_content: bool
+    has_supported_anchor: bool
+
+
+DrawingSnapshot = ChartSnapshot | ImageSnapshot | TextShapeSnapshot
 
 
 @dataclass(frozen=True)

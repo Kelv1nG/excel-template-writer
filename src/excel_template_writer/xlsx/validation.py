@@ -17,6 +17,7 @@ from excel_template_writer.xlsx.model import (
     PlannedDrawing,
     SheetFeaturePlan,
     SheetSnapshot,
+    TextShapeSnapshot,
 )
 
 
@@ -164,7 +165,8 @@ def plan_sheet_features(
         diagnostics.append(
             Diagnostic(
                 DiagnosticCode.DRAWING_REQUIRES_UNSUPPORTED_TRANSFORM,
-                "linked images, shapes, and unsupported drawing objects cannot be preserved",
+                "linked images, grouped shapes, and unsupported drawing objects "
+                "cannot be preserved",
                 _location(sheet),
             )
         )
@@ -196,8 +198,7 @@ def plan_sheet_features(
                         location,
                     )
                 )
-        else:
-            assert isinstance(drawing, ImageSnapshot)
+        elif isinstance(drawing, ImageSnapshot):
             anchor_code = DiagnosticCode.IMAGE_ANCHOR_REQUIRES_UNSUPPORTED_TRANSFORM
             drawing_name = "image"
             if not drawing.has_supported_format:
@@ -205,6 +206,18 @@ def plan_sheet_features(
                     Diagnostic(
                         DiagnosticCode.IMAGE_FORMAT_UNSUPPORTED,
                         "embedded images must contain valid PNG or JPEG media",
+                        location,
+                    )
+                )
+        else:
+            assert isinstance(drawing, TextShapeSnapshot)
+            anchor_code = DiagnosticCode.TEXT_SHAPE_ANCHOR_REQUIRES_UNSUPPORTED_TRANSFORM
+            drawing_name = "text shape"
+            if not drawing.has_supported_content:
+                diagnostics.append(
+                    Diagnostic(
+                        DiagnosticCode.TEXT_SHAPE_UNSUPPORTED,
+                        "text shapes must be static, relationship-free DrawingML shapes",
                         location,
                     )
                 )

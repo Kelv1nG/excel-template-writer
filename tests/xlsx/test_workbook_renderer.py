@@ -96,6 +96,234 @@ def _chart_style(path: Path, part: str = "chart1.xml") -> str | None:
 _DRAWING_NAMESPACE = "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
 _DRAWING_MAIN_NAMESPACE = "http://schemas.openxmlformats.org/drawingml/2006/main"
 _CHART_NAMESPACE = "http://schemas.openxmlformats.org/drawingml/2006/chart"
+_SPREADSHEET_NAMESPACE = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+_OFFICE_RELATIONSHIP_NAMESPACE = (
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+)
+_PACKAGE_RELATIONSHIP_NAMESPACE = "http://schemas.openxmlformats.org/package/2006/relationships"
+_CONTENT_TYPES_NAMESPACE = "http://schemas.openxmlformats.org/package/2006/content-types"
+_DRAWING_RELATIONSHIP = (
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing"
+)
+
+
+def _qn(namespace: str, name: str) -> str:
+    return f"{{{namespace}}}{name}"
+
+
+def _shape_anchor(
+    *,
+    row: int,
+    column: int,
+    text: str = "Static {{ customer.name }}",
+    preset: str = "roundRect",
+    to_row: int | None = None,
+    to_column: int | None = None,
+    unsupported: str | None = None,
+) -> ElementTree.Element:
+    if to_row is None or to_column is None:
+        anchor = ElementTree.Element(_qn(_DRAWING_NAMESPACE, "oneCellAnchor"))
+    else:
+        anchor = ElementTree.Element(_qn(_DRAWING_NAMESPACE, "twoCellAnchor"))
+
+    def add_marker(name: str, marker_row: int, marker_column: int) -> None:
+        marker = ElementTree.SubElement(anchor, _qn(_DRAWING_NAMESPACE, name))
+        ElementTree.SubElement(marker, _qn(_DRAWING_NAMESPACE, "col")).text = str(marker_column)
+        ElementTree.SubElement(marker, _qn(_DRAWING_NAMESPACE, "colOff")).text = "9525"
+        ElementTree.SubElement(marker, _qn(_DRAWING_NAMESPACE, "row")).text = str(marker_row)
+        ElementTree.SubElement(marker, _qn(_DRAWING_NAMESPACE, "rowOff")).text = "19050"
+
+    add_marker("from", row, column)
+    if to_row is None or to_column is None:
+        ElementTree.SubElement(
+            anchor,
+            _qn(_DRAWING_NAMESPACE, "ext"),
+            {"cx": "2286000", "cy": "762000"},
+        )
+    else:
+        add_marker("to", to_row, to_column)
+
+    shape = ElementTree.SubElement(anchor, _qn(_DRAWING_NAMESPACE, "sp"))
+    if unsupported == "textlink":
+        shape.set("textlink", "Sheet!A1")
+    if unsupported == "macro":
+        shape.set("macro", "ExampleMacro")
+    non_visual = ElementTree.SubElement(shape, _qn(_DRAWING_NAMESPACE, "nvSpPr"))
+    ElementTree.SubElement(
+        non_visual,
+        _qn(_DRAWING_NAMESPACE, "cNvPr"),
+        {"id": "7", "name": "Decorative text", "descr": "Editable callout"},
+    )
+    ElementTree.SubElement(
+        non_visual,
+        _qn(_DRAWING_NAMESPACE, "cNvSpPr"),
+        {"txBox": "1"},
+    )
+    shape_properties = ElementTree.SubElement(shape, _qn(_DRAWING_NAMESPACE, "spPr"))
+    transform = ElementTree.SubElement(
+        shape_properties,
+        _qn(_DRAWING_MAIN_NAMESPACE, "xfrm"),
+        {"rot": "600000"},
+    )
+    ElementTree.SubElement(
+        transform,
+        _qn(_DRAWING_MAIN_NAMESPACE, "off"),
+        {"x": "0", "y": "0"},
+    )
+    ElementTree.SubElement(
+        transform,
+        _qn(_DRAWING_MAIN_NAMESPACE, "ext"),
+        {"cx": "2286000", "cy": "762000"},
+    )
+    geometry = ElementTree.SubElement(
+        shape_properties,
+        _qn(_DRAWING_MAIN_NAMESPACE, "prstGeom"),
+        {"prst": preset},
+    )
+    ElementTree.SubElement(geometry, _qn(_DRAWING_MAIN_NAMESPACE, "avLst"))
+    fill = ElementTree.SubElement(shape_properties, _qn(_DRAWING_MAIN_NAMESPACE, "solidFill"))
+    ElementTree.SubElement(
+        fill,
+        _qn(_DRAWING_MAIN_NAMESPACE, "srgbClr"),
+        {"val": "D9EAF7"},
+    )
+    line = ElementTree.SubElement(
+        shape_properties,
+        _qn(_DRAWING_MAIN_NAMESPACE, "ln"),
+        {"w": "19050"},
+    )
+    line_fill = ElementTree.SubElement(line, _qn(_DRAWING_MAIN_NAMESPACE, "solidFill"))
+    ElementTree.SubElement(
+        line_fill,
+        _qn(_DRAWING_MAIN_NAMESPACE, "srgbClr"),
+        {"val": "1F4E78"},
+    )
+    text_body = ElementTree.SubElement(shape, _qn(_DRAWING_NAMESPACE, "txBody"))
+    body_properties = ElementTree.SubElement(
+        text_body,
+        _qn(_DRAWING_MAIN_NAMESPACE, "bodyPr"),
+        {"wrap": "square", "anchor": "ctr", "lIns": "91440", "rIns": "91440"},
+    )
+    if unsupported == "wordart":
+        ElementTree.SubElement(
+            body_properties,
+            _qn(_DRAWING_MAIN_NAMESPACE, "prstTxWarp"),
+            {"prst": "textArchUp"},
+        )
+    else:
+        ElementTree.SubElement(body_properties, _qn(_DRAWING_MAIN_NAMESPACE, "spAutoFit"))
+    ElementTree.SubElement(text_body, _qn(_DRAWING_MAIN_NAMESPACE, "lstStyle"))
+    paragraph = ElementTree.SubElement(text_body, _qn(_DRAWING_MAIN_NAMESPACE, "p"))
+    if unsupported == "field":
+        field = ElementTree.SubElement(
+            paragraph,
+            _qn(_DRAWING_MAIN_NAMESPACE, "fld"),
+            {"id": "{00000000-0000-0000-0000-000000000001}", "type": "datetime"},
+        )
+        ElementTree.SubElement(field, _qn(_DRAWING_MAIN_NAMESPACE, "rPr"))
+        ElementTree.SubElement(field, _qn(_DRAWING_MAIN_NAMESPACE, "t")).text = text
+    else:
+        run = ElementTree.SubElement(paragraph, _qn(_DRAWING_MAIN_NAMESPACE, "r"))
+        run_properties = ElementTree.SubElement(
+            run,
+            _qn(_DRAWING_MAIN_NAMESPACE, "rPr"),
+            {"lang": "en-US", "sz": "1400", "b": "1"},
+        )
+        run_fill = ElementTree.SubElement(
+            run_properties,
+            _qn(_DRAWING_MAIN_NAMESPACE, "solidFill"),
+        )
+        ElementTree.SubElement(
+            run_fill,
+            _qn(_DRAWING_MAIN_NAMESPACE, "srgbClr"),
+            {"val": "1F1F1F"},
+        )
+        ElementTree.SubElement(run, _qn(_DRAWING_MAIN_NAMESPACE, "t")).text = text
+    ElementTree.SubElement(paragraph, _qn(_DRAWING_MAIN_NAMESPACE, "endParaRPr"))
+    ElementTree.SubElement(
+        anchor,
+        _qn(_DRAWING_NAMESPACE, "clientData"),
+        {"fLocksWithSheet": "1", "fPrintsWithSheet": "1"},
+    )
+    return anchor
+
+
+def _inject_text_shapes(path: Path, anchors: tuple[ElementTree.Element, ...]) -> None:
+    temporary_path = path.with_name(f"{path.stem}-with-shapes.xlsx")
+    with ZipFile(path, "r") as source, ZipFile(temporary_path, "w") as destination:
+        source_names = frozenset(source.namelist())
+        replacements: dict[str, bytes] = {}
+        additions: dict[str, bytes] = {}
+        drawing_part = "xl/drawings/drawing1.xml"
+        if drawing_part in source_names:
+            drawing_root = ElementTree.fromstring(source.read(drawing_part))
+            drawing_root.extend(anchors)
+            replacements[drawing_part] = ElementTree.tostring(drawing_root, encoding="utf-8")
+        else:
+            drawing_root = ElementTree.Element(_qn(_DRAWING_NAMESPACE, "wsDr"))
+            drawing_root.extend(anchors)
+            additions[drawing_part] = ElementTree.tostring(drawing_root, encoding="utf-8")
+
+            relationships_part = "xl/worksheets/_rels/sheet1.xml.rels"
+            if relationships_part in source_names:
+                relationships_root = ElementTree.fromstring(source.read(relationships_part))
+            else:
+                relationships_root = ElementTree.Element(
+                    _qn(_PACKAGE_RELATIONSHIP_NAMESPACE, "Relationships")
+                )
+            relationship_id = "rId1"
+            used_ids = {relationship.get("Id") for relationship in relationships_root}
+            while relationship_id in used_ids:
+                relationship_id = f"rId{int(relationship_id.removeprefix('rId')) + 1}"
+            ElementTree.SubElement(
+                relationships_root,
+                _qn(_PACKAGE_RELATIONSHIP_NAMESPACE, "Relationship"),
+                {
+                    "Id": relationship_id,
+                    "Type": _DRAWING_RELATIONSHIP,
+                    "Target": "/xl/drawings/drawing1.xml",
+                },
+            )
+            relationship_xml = ElementTree.tostring(relationships_root, encoding="utf-8")
+            if relationships_part in source_names:
+                replacements[relationships_part] = relationship_xml
+            else:
+                additions[relationships_part] = relationship_xml
+
+            worksheet_part = "xl/worksheets/sheet1.xml"
+            worksheet_root = ElementTree.fromstring(source.read(worksheet_part))
+            ElementTree.SubElement(
+                worksheet_root,
+                _qn(_SPREADSHEET_NAMESPACE, "drawing"),
+                {_qn(_OFFICE_RELATIONSHIP_NAMESPACE, "id"): relationship_id},
+            )
+            replacements[worksheet_part] = ElementTree.tostring(
+                worksheet_root,
+                encoding="utf-8",
+            )
+
+            content_types = ElementTree.fromstring(source.read("[Content_Types].xml"))
+            ElementTree.SubElement(
+                content_types,
+                _qn(_CONTENT_TYPES_NAMESPACE, "Override"),
+                {
+                    "PartName": "/xl/drawings/drawing1.xml",
+                    "ContentType": ("application/vnd.openxmlformats-officedocument.drawing+xml"),
+                },
+            )
+            replacements["[Content_Types].xml"] = ElementTree.tostring(
+                content_types,
+                encoding="utf-8",
+            )
+
+        for member in source.infolist():
+            destination.writestr(
+                member,
+                replacements.get(member.filename, source.read(member.filename)),
+            )
+        for name, data in additions.items():
+            destination.writestr(name, data)
+    temporary_path.replace(path)
 
 
 def _drawing_anchors(path: Path, part: str = "drawing1.xml") -> list[ElementTree.Element]:
@@ -109,6 +337,8 @@ def _drawing_kind(anchor: ElementTree.Element) -> str:
         return "chart"
     if anchor.find(f".//{{{_DRAWING_MAIN_NAMESPACE}}}blip") is not None:
         return "image"
+    if anchor.find(f".//{{{_DRAWING_NAMESPACE}}}sp") is not None:
+        return "text shape"
     return "unsupported"
 
 
@@ -132,6 +362,34 @@ def _picture_metadata(anchor: ElementTree.Element) -> tuple[str | None, str | No
     properties = anchor.find(f".//{{{_DRAWING_NAMESPACE}}}cNvPr")
     assert properties is not None
     return properties.get("name"), properties.get("descr")
+
+
+def _shape_text(anchor: ElementTree.Element) -> str:
+    return "".join(element.text or "" for element in anchor.iter(_qn(_DRAWING_MAIN_NAMESPACE, "t")))
+
+
+def _shape_visual_state(anchor: ElementTree.Element) -> tuple[object, ...]:
+    geometry = anchor.find(f".//{{{_DRAWING_MAIN_NAMESPACE}}}prstGeom")
+    transform = anchor.find(f".//{{{_DRAWING_MAIN_NAMESPACE}}}xfrm")
+    body = anchor.find(f".//{{{_DRAWING_MAIN_NAMESPACE}}}bodyPr")
+    run = anchor.find(f".//{{{_DRAWING_MAIN_NAMESPACE}}}rPr")
+    metadata = anchor.find(f".//{{{_DRAWING_NAMESPACE}}}cNvPr")
+    assert geometry is not None
+    assert transform is not None
+    assert body is not None
+    assert run is not None
+    assert metadata is not None
+    return (
+        geometry.get("prst"),
+        transform.get("rot"),
+        body.get("wrap"),
+        body.get("anchor"),
+        body.get("lIns"),
+        run.get("sz"),
+        run.get("b"),
+        metadata.get("name"),
+        metadata.get("descr"),
+    )
 
 
 def _media_payloads(path: Path) -> list[bytes]:
@@ -963,6 +1221,178 @@ def test_preserves_embedded_jpeg_bytes(tmp_path: Path) -> None:
     assert _media_payloads(output_path) == [_ONE_PIXEL_JPEG]
     with ZipFile(output_path) as archive:
         assert "xl/media/image1.jpeg" in archive.namelist()
+
+
+def test_preserves_static_text_shape_and_moves_it_with_row_expansion(
+    tmp_path: Path,
+) -> None:
+    template_path = tmp_path / "text-shape-template.xlsx"
+    output_path = tmp_path / "text-shape-output.xlsx"
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet["A1"] = "{% for item in items %}{{ item }}"
+    sheet["B1"] = "{% endfor %}"
+    _save(workbook, template_path)
+    workbook.close()
+    _inject_text_shapes(template_path, (_shape_anchor(row=2, column=3),))
+    template_anchor = _drawing_anchors(template_path)[0]
+
+    render_workbook(template_path, output_path, {"items": ["A", "B"]})
+
+    output_anchor = _drawing_anchors(output_path)[0]
+    assert _drawing_kind(output_anchor) == "text shape"
+    assert _anchor_marker(template_anchor) == (2, 3)
+    assert _anchor_marker(output_anchor) == (3, 3)
+    assert _drawing_ext(output_anchor) == _drawing_ext(template_anchor)
+    assert _shape_text(output_anchor) == "Static {{ customer.name }}"
+    assert _shape_visual_state(output_anchor) == _shape_visual_state(template_anchor)
+    rendered = load_workbook(output_path, read_only=True, data_only=False)
+    rendered.close()
+
+
+def test_moves_only_text_shapes_inside_cell_shift_lane(tmp_path: Path) -> None:
+    template_path = tmp_path / "lane-text-shapes-template.xlsx"
+    output_path = tmp_path / "lane-text-shapes-output.xlsx"
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet["A1"] = '{% for item in items shift="cells" %}{{ item }}'
+    sheet["B1"] = "{% endfor %}"
+    _save(workbook, template_path)
+    workbook.close()
+    _inject_text_shapes(
+        template_path,
+        (
+            _shape_anchor(row=3, column=0, text="Inside lane"),
+            _shape_anchor(row=3, column=3, text="Outside lane", preset="wedgeRectCallout"),
+        ),
+    )
+
+    render_workbook(template_path, output_path, {"items": [1, 2, 3]})
+
+    anchors = _drawing_anchors(output_path)
+    assert [_drawing_kind(anchor) for anchor in anchors] == ["text shape", "text shape"]
+    assert [_anchor_marker(anchor) for anchor in anchors] == [(5, 0), (3, 3)]
+    assert [_shape_text(anchor) for anchor in anchors] == ["Inside lane", "Outside lane"]
+
+
+def test_translates_two_cell_text_shape_without_resizing(tmp_path: Path) -> None:
+    template_path = tmp_path / "two-cell-text-shape-template.xlsx"
+    output_path = tmp_path / "two-cell-text-shape-output.xlsx"
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet["A1"] = "{% for item in items %}{{ item }}"
+    sheet["B1"] = "{% endfor %}"
+    _save(workbook, template_path)
+    workbook.close()
+    _inject_text_shapes(
+        template_path,
+        (_shape_anchor(row=2, column=3, to_row=12, to_column=8),),
+    )
+
+    render_workbook(template_path, output_path, {"items": [1, 2]})
+
+    anchor = _drawing_anchors(output_path)[0]
+    assert _anchor_marker(anchor) == (3, 3)
+    assert _anchor_marker(anchor, "to") == (13, 8)
+
+
+def test_rejects_text_shape_anchor_copied_by_repeat(tmp_path: Path) -> None:
+    template_path = tmp_path / "copied-text-shape-template.xlsx"
+    output_path = tmp_path / "should-not-exist.xlsx"
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet["A1"] = "{% for item in items %}{{ item }}"
+    sheet["B1"] = "{% endfor %}"
+    _save(workbook, template_path)
+    workbook.close()
+    _inject_text_shapes(template_path, (_shape_anchor(row=0, column=0),))
+
+    with pytest.raises(TemplateCompilationError) as caught:
+        render_workbook(template_path, output_path, {"items": [1, 2]})
+
+    assert DiagnosticCode.TEXT_SHAPE_ANCHOR_REQUIRES_UNSUPPORTED_TRANSFORM in {
+        diagnostic.code for diagnostic in caught.value.diagnostics
+    }
+    assert not output_path.exists()
+
+
+def test_rejects_two_cell_text_shape_resize(tmp_path: Path) -> None:
+    template_path = tmp_path / "resized-text-shape-template.xlsx"
+    output_path = tmp_path / "should-not-exist.xlsx"
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet["A2"] = "{% for item in items %}{{ item }}"
+    sheet["B2"] = "{% endfor %}"
+    _save(workbook, template_path)
+    workbook.close()
+    _inject_text_shapes(
+        template_path,
+        (_shape_anchor(row=0, column=3, to_row=3, to_column=8),),
+    )
+
+    with pytest.raises(TemplateCompilationError) as caught:
+        render_workbook(template_path, output_path, {"items": [1, 2]})
+
+    assert DiagnosticCode.TEXT_SHAPE_ANCHOR_REQUIRES_UNSUPPORTED_TRANSFORM in {
+        diagnostic.code for diagnostic in caught.value.diagnostics
+    }
+    assert not output_path.exists()
+
+
+@pytest.mark.parametrize("unsupported", ["field", "macro", "textlink", "wordart"])
+def test_rejects_dynamic_or_linked_text_shape_content(
+    tmp_path: Path,
+    unsupported: str,
+) -> None:
+    template_path = tmp_path / f"unsupported-{unsupported}-shape.xlsx"
+    output_path = tmp_path / "should-not-exist.xlsx"
+    workbook = Workbook()
+    workbook.active["A1"] = "{{ value }}"
+    _save(workbook, template_path)
+    workbook.close()
+    _inject_text_shapes(
+        template_path,
+        (_shape_anchor(row=2, column=3, unsupported=unsupported),),
+    )
+
+    with pytest.raises(TemplateCompilationError) as caught:
+        render_workbook(template_path, output_path, {"value": 42})
+
+    assert DiagnosticCode.TEXT_SHAPE_UNSUPPORTED in {
+        diagnostic.code for diagnostic in caught.value.diagnostics
+    }
+    assert not output_path.exists()
+
+
+def test_preserves_mixed_shape_image_chart_stacking_order(tmp_path: Path) -> None:
+    template_path = tmp_path / "mixed-shape-drawing-template.xlsx"
+    output_path = tmp_path / "mixed-shape-drawing-output.xlsx"
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet["A1"] = "{{ value }}"
+    chart = BarChart()
+    chart.add_data(Reference(sheet, min_col=1, min_row=1, max_row=1))
+    sheet.add_chart(chart, "D2")
+    sheet.add_image(_StaticImage(), "D20")
+    _save(workbook, template_path)
+    workbook.close()
+    _inject_text_shapes(template_path, (_shape_anchor(row=9, column=3),))
+    _set_drawing_order(template_path, ("image", "text shape", "chart"))
+
+    render_workbook(template_path, output_path, {"value": 42})
+
+    assert [_drawing_kind(anchor) for anchor in _drawing_anchors(output_path)] == [
+        "image",
+        "text shape",
+        "chart",
+    ]
+    identifiers = [
+        int(properties.get("id", "0"))
+        for anchor in _drawing_anchors(output_path)
+        for properties in anchor.iter(_qn(_DRAWING_NAMESPACE, "cNvPr"))
+    ]
+    assert identifiers == [1, 2, 3]
+    assert _media_payloads(output_path) == _media_payloads(template_path)
 
 
 def test_preserves_mixed_chart_image_stacking_order(tmp_path: Path) -> None:
