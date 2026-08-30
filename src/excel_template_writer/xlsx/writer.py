@@ -500,10 +500,14 @@ def _restore_drawing_order(
                             "Target": f"/{drawing_part}",
                         },
                     )
-                    modified_parts[relationships_part] = ElementTree.tostring(
+                    serialized_relationships = ElementTree.tostring(
                         relationships_root,
                         encoding="utf-8",
                     )
+                    if relationships_part in archive_names:
+                        modified_parts[relationships_part] = serialized_relationships
+                    else:
+                        new_parts[relationships_part] = serialized_relationships
                     modified_parts[sheet_part] = _append_worksheet_drawing(
                         archive.read(sheet_part),
                         relationship_id,

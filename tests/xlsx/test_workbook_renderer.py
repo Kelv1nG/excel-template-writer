@@ -332,6 +332,27 @@ def _drawing_anchors(path: Path, part: str = "drawing1.xml") -> list[ElementTree
     return list(root)
 
 
+def _worksheet_drawing_target(path: Path, sheet_index: int = 1) -> str:
+    worksheet_part = f"xl/worksheets/sheet{sheet_index}.xml"
+    relationships_part = f"xl/worksheets/_rels/sheet{sheet_index}.xml.rels"
+    with ZipFile(path) as archive:
+        worksheet = ElementTree.fromstring(archive.read(worksheet_part))
+        root = ElementTree.fromstring(archive.read(relationships_part))
+    drawing = worksheet.find(_qn(_SPREADSHEET_NAMESPACE, "drawing"))
+    assert drawing is not None
+    relationship_id = drawing.get(_qn(_OFFICE_RELATIONSHIP_NAMESPACE, "id"))
+    relationships = [
+        relationship
+        for relationship in root
+        if relationship.get("Id") == relationship_id
+        and relationship.get("Type") == _DRAWING_RELATIONSHIP
+    ]
+    assert len(relationships) == 1
+    target = relationships[0].get("Target")
+    assert target is not None
+    return target.lstrip("/")
+
+
 def _drawing_kind(anchor: ElementTree.Element) -> str:
     if anchor.find(f".//{{{_CHART_NAMESPACE}}}chart") is not None:
         return "chart"
@@ -1246,6 +1267,7 @@ def test_preserves_static_text_shape_and_moves_it_with_row_expansion(
     assert _drawing_ext(output_anchor) == _drawing_ext(template_anchor)
     assert _shape_text(output_anchor) == "Static {{ customer.name }}"
     assert _shape_visual_state(output_anchor) == _shape_visual_state(template_anchor)
+    assert _worksheet_drawing_target(output_path) == "xl/drawings/drawing1.xml"
     rendered = load_workbook(output_path, read_only=True, data_only=False)
     rendered.close()
 
