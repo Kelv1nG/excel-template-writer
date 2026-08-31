@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import ast as python_ast
+import math
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
 from enum import Enum, auto
-from typing import Any
+from typing import Any, cast
 
 from excel_template_writer.date_formats import (
     DateFormat,
@@ -41,6 +42,18 @@ class FilterValidationError(ValueError):
 
 class FilterTypeError(ExpressionEvaluationError):
     """A runtime value has the wrong canonical type for a compiled filter."""
+
+
+class ArithmeticTypeError(ExpressionEvaluationError):
+    """A runtime value has the wrong canonical type for numeric arithmetic."""
+
+
+class DivisionByZeroError(ExpressionEvaluationError):
+    """A numeric division expression has a zero divisor."""
+
+
+class NonFiniteExpressionNumberError(ExpressionEvaluationError):
+    """An expression operation produced a non-finite float or decimal."""
 
 
 class MissingValueError(ExpressionEvaluationError):
@@ -122,6 +135,10 @@ class _TokenKind(Enum):
     RIGHT_PAREN = auto()
     COMMA = auto()
     PIPE = auto()
+    PLUS = auto()
+    MINUS = auto()
+    STAR = auto()
+    SLASH = auto()
     EQ = auto()
     NE = auto()
     LT = auto()
@@ -143,7 +160,7 @@ _TOKEN_PATTERN = re.compile(
     r"|(?P<string>'(?:\\.|[^'\\])*'|\"(?:\\.|[^\"\\])*\")"
     r"|(?P<number>\d+(?:\.\d+)?)"
     r"|(?P<identifier>[A-Za-z_][A-Za-z0-9_]*)"
-    r"|(?P<operator>==|!=|<=|>=|[.\[\](),|<>])"
+    r"|(?P<operator>==|!=|<=|>=|[.\[\](),|<>+*/-])"
 )
 
 
@@ -187,6 +204,10 @@ def _tokenize(source: str) -> tuple[_Token, ...]:
                 ")": _TokenKind.RIGHT_PAREN,
                 ",": _TokenKind.COMMA,
                 "|": _TokenKind.PIPE,
+                "+": _TokenKind.PLUS,
+                "-": _TokenKind.MINUS,
+                "*": _TokenKind.STAR,
+                "/": _TokenKind.SLASH,
                 "==": _TokenKind.EQ,
                 "!=": _TokenKind.NE,
                 "<": _TokenKind.LT,
@@ -306,7 +327,7 @@ class _Parser:
     def parse_comparison(self) -> Expression:
         """Parse supported equality and ordering comparisons."""
 
-        expression = self.parse_unary()
+        expression = self.parse_additive()
         comparisons = {
             _TokenKind.EQ: "==",
             _TokenKind.NE: "!=",
@@ -317,15 +338,45 @@ class _Parser:
         }
         while self.current.kind in comparisons:
             operator = comparisons[self.advance().kind]
+            expression = BinaryExpression(expression, operator, self.parse_additive())
+        return expression
+
+    def parse_additive(self) -> Expression:
+        """Parse left-associative numeric addition and subtraction."""
+
+        expression = self.parse_multiplicative()
+        operators = {
+            _TokenKind.PLUS: "+",
+            _TokenKind.MINUS: "-",
+        }
+        while self.current.kind in operators:
+            operator = operators[self.advance().kind]
+            expression = BinaryExpression(expression, operator, self.parse_multiplicative())
+        return expression
+
+    def parse_multiplicative(self) -> Expression:
+        """Parse left-associative numeric multiplication and division."""
+
+        expression = self.parse_unary()
+        operators = {
+            _TokenKind.STAR: "*",
+            _TokenKind.SLASH: "/",
+        }
+        while self.current.kind in operators:
+            operator = operators[self.advance().kind]
             expression = BinaryExpression(expression, operator, self.parse_unary())
         return expression
 
     def parse_unary(self) -> Expression:
-        """Parse unary ``not`` or delegate to postfix parsing."""
+        """Parse unary boolean and numeric operators or delegate to postfix parsing."""
 
         if self.current.kind is _TokenKind.IDENTIFIER and self.current.value == "not":
             self.advance()
             return UnaryExpression("not", self.parse_unary())
+        if self.accept(_TokenKind.PLUS):
+            return UnaryExpression("+", self.parse_unary())
+        if self.accept(_TokenKind.MINUS):
+            return UnaryExpression("-", self.parse_unary())
         return self.parse_postfix()
 
     def parse_postfix(self) -> Expression:
@@ -390,6 +441,8 @@ def parse_expression(source: str) -> Expression:
     return _Parser(source).parse()
 
 
+_COLUMN_AGGREGATE_FILTERS = frozenset({"sum", "min", "max", "count"})
+
 _FILTER_ARGUMENT_COUNTS: dict[str, frozenset[int]] = {
     "default": frozenset({1}),
     "string": frozenset({0}),
@@ -398,6 +451,9 @@ _FILTER_ARGUMENT_COUNTS: dict[str, frozenset[int]] = {
     "join": frozenset({0, 1}),
     "date": frozenset({1}),
     "sum": frozenset({0, 1}),
+    "min": frozenset({0, 1}),
+    "max": frozenset({0, 1}),
+    "count": frozenset({0, 1}),
 }
 
 
@@ -434,13 +490,13 @@ def _validate_filter_arguments(
         assert isinstance(separator, LiteralExpression)
         if not isinstance(separator.value, str):
             raise FilterValidationError("filter 'join' separator must be a string literal")
-    if name == "sum" and arguments:
+    if name in _COLUMN_AGGREGATE_FILTERS and arguments:
         column = arguments[0]
         assert isinstance(column, LiteralExpression)
         if not isinstance(column.value, str):
-            raise FilterValidationError("filter 'sum' column must be a string literal")
+            raise FilterValidationError(f"filter {name!r} column must be a string literal")
         if column.value.startswith("_"):
-            raise FilterValidationError("filter 'sum' column must not begin with '_'")
+            raise FilterValidationError(f"filter {name!r} column must not begin with '_'")
 
 
 def _compile_expression_tree(expression: Expression) -> Expression:
@@ -551,35 +607,44 @@ def _column_value_path(collection_path: str, index: int, column: str) -> str:
     return f"{item_path}[{column!r}]"
 
 
-def _evaluate_sum_filter(
+type _NumericValue = int | float | Decimal
+
+
+class _NumericKind(Enum):
+    INTEGER = auto()
+    FLOAT = auto()
+    DECIMAL = auto()
+
+
+def _selected_collection_values(
     value: Any,
     column: str | None,
     collection_expression: Expression,
-) -> int | float | Decimal:
-    """Reduce an ordered numeric collection or one numeric record column.
+    filter_name: str,
+) -> Iterator[tuple[Any, str]]:
+    """Yield values selected by an aggregate filter with display paths.
 
     Args:
-        value: Evaluated input supplied to the ``sum`` filter.
+        value: Evaluated collection supplied to the aggregate filter.
         column: Optional literal top-level record key to select from every item.
         collection_expression: Input expression used to describe failing value paths.
+        filter_name: Aggregate filter name used in diagnostics.
 
-    Returns:
-        The canonical numeric total, or integer zero when no numbers are selected.
+    Yields:
+        Selected values paired with readable input paths.
 
     Raises:
-        FilterTypeError: If the input shape or selected values violate the filter contract.
+        FilterTypeError: If the input is not ordered or a column item is not a record.
         MissingValueError: If a selected record does not contain ``column``.
     """
 
     if not isinstance(value, (list, tuple)):
         raise FilterTypeError(
-            f"filter 'sum' requires an ordered collection; received {type(value).__name__}"
+            f"filter {filter_name!r} requires an ordered collection; "
+            f"received {type(value).__name__}"
         )
 
     root, collection_path = _root_path(collection_expression)
-    total: int | float | Decimal = 0
-    contains_float = False
-    contains_decimal = False
     for index, item in enumerate(value):
         selected = item
         selected_path = f"{collection_path}[{index}]"
@@ -587,44 +652,398 @@ def _evaluate_sum_filter(
             selected_path = _column_value_path(collection_path, index, column)
             if not isinstance(item, Mapping):
                 raise FilterTypeError(
-                    f"filter 'sum' with column {column!r} requires record items; "
+                    f"filter {filter_name!r} with column {column!r} requires record items; "
                     f"{collection_path}[{index}] is {type(item).__name__}"
                 )
             if column not in item:
                 raise MissingValueError(root, selected_path)
             selected = item[column]
+        yield selected, selected_path
 
+
+def _numeric_kind(value: _NumericValue) -> _NumericKind:
+    """Classify one already-validated canonical numeric value.
+
+    Args:
+        value: Integer, float, or decimal value to classify.
+
+    Returns:
+        The value's numeric family.
+    """
+
+    if isinstance(value, Decimal):
+        return _NumericKind.DECIMAL
+    if isinstance(value, float):
+        return _NumericKind.FLOAT
+    return _NumericKind.INTEGER
+
+
+def _coerce_numeric(
+    value: _NumericValue,
+    kind: _NumericKind,
+    description: str,
+) -> _NumericValue:
+    """Promote a number to a compatible aggregate or arithmetic family.
+
+    Args:
+        value: Canonical number to promote.
+        kind: Destination numeric family.
+        description: Operation description used for conversion failures.
+
+    Returns:
+        The promoted number.
+    """
+
+    try:
+        if kind is _NumericKind.DECIMAL:
+            return value if isinstance(value, Decimal) else Decimal(value)
+        if kind is _NumericKind.FLOAT:
+            return value if isinstance(value, float) else float(value)
+        return value
+    except (OverflowError, ValueError) as error:
+        raise NonFiniteExpressionNumberError(
+            f"{description} could not promote an operand to a finite number"
+        ) from error
+
+
+def _apply_promoted_numeric_operator(
+    left: _NumericValue,
+    operator: str,
+    right: _NumericValue,
+) -> _NumericValue:
+    """Apply an operator after both operands have one compatible family.
+
+    Args:
+        left: Promoted left numeric operand.
+        operator: Binary ``+``, ``-``, ``*``, or ``/``.
+        right: Promoted right numeric operand.
+
+    Returns:
+        The numeric operation result.
+    """
+
+    left_operand = cast(Any, left)
+    right_operand = cast(Any, right)
+    if operator == "+":
+        result = left_operand + right_operand
+    elif operator == "-":
+        result = left_operand - right_operand
+    elif operator == "*":
+        result = left_operand * right_operand
+    elif operator == "/":
+        result = left_operand / right_operand
+    else:
+        raise TypeError(f"unsupported arithmetic operator: {operator}")
+    return cast(_NumericValue, result)
+
+
+def _ensure_finite_expression_number(value: _NumericValue, description: str) -> _NumericValue:
+    """Require a derived float or decimal to remain finite.
+
+    Args:
+        value: Derived numeric expression result.
+        description: Operation description used in the diagnostic message.
+
+    Returns:
+        The unchanged finite value.
+
+    Raises:
+        NonFiniteExpressionNumberError: If ``value`` is an infinity or NaN.
+    """
+
+    if isinstance(value, float) and not math.isfinite(value):
+        raise NonFiniteExpressionNumberError(f"{description} produced a non-finite float")
+    if isinstance(value, Decimal) and not value.is_finite():
+        raise NonFiniteExpressionNumberError(f"{description} produced a non-finite decimal")
+    return value
+
+
+def _require_filter_numeric(value: Any, filter_name: str, path: str) -> _NumericValue:
+    """Validate one selected aggregate value as a canonical number.
+
+    Args:
+        value: Selected non-null aggregate value.
+        filter_name: Aggregate filter name used in diagnostics.
+        path: Readable input path for the selected value.
+
+    Returns:
+        The validated integer, float, or decimal.
+
+    Raises:
+        FilterTypeError: If the selected value is not numeric.
+    """
+
+    if isinstance(value, bool) or not isinstance(value, (int, float, Decimal)):
+        raise FilterTypeError(
+            f"filter {filter_name!r} requires numeric values; {path} is {type(value).__name__}"
+        )
+    return value
+
+
+def _merge_filter_numeric_kind(
+    current: _NumericKind,
+    incoming: _NumericKind,
+    filter_name: str,
+    path: str,
+) -> _NumericKind:
+    """Resolve aggregate numeric promotion or reject float/decimal mixing.
+
+    Args:
+        current: Numeric family accumulated so far.
+        incoming: Family of the next selected value.
+        filter_name: Aggregate filter name used in diagnostics.
+        path: Readable input path of the next value.
+
+    Returns:
+        The common numeric family.
+
+    Raises:
+        FilterTypeError: If float and decimal families would be mixed.
+    """
+
+    if {current, incoming} == {_NumericKind.FLOAT, _NumericKind.DECIMAL}:
+        raise FilterTypeError(
+            f"filter {filter_name!r} cannot mix floating-point and decimal values; "
+            f"conflict at {path}"
+        )
+    if _NumericKind.DECIMAL in {current, incoming}:
+        return _NumericKind.DECIMAL
+    if _NumericKind.FLOAT in {current, incoming}:
+        return _NumericKind.FLOAT
+    return _NumericKind.INTEGER
+
+
+def _evaluate_numeric_aggregate_filter(
+    filter_name: str,
+    value: Any,
+    column: str | None,
+    collection_expression: Expression,
+) -> _NumericValue | None:
+    """Evaluate ``sum``, ``min``, or ``max`` over selected numeric values.
+
+    Args:
+        filter_name: One supported numeric aggregate filter name.
+        value: Evaluated ordered collection supplied to the filter.
+        column: Optional literal top-level record key.
+        collection_expression: Input expression used for value paths.
+
+    Returns:
+        A promoted numeric aggregate, zero for an empty sum, or null for an empty extremum.
+
+    Raises:
+        FilterTypeError: If selected values violate the numeric aggregate contract.
+        MissingValueError: If a selected record column is absent.
+        NonFiniteExpressionNumberError: If summation produces a non-finite result.
+    """
+
+    aggregate: _NumericValue | None = None
+    kind: _NumericKind | None = None
+    for selected, selected_path in _selected_collection_values(
+        value,
+        column,
+        collection_expression,
+        filter_name,
+    ):
         if selected is None:
             continue
-        if isinstance(selected, bool) or not isinstance(selected, (int, float, Decimal)):
+        numeric = _require_filter_numeric(selected, filter_name, selected_path)
+        incoming_kind = _numeric_kind(numeric)
+        if aggregate is None or kind is None:
+            aggregate = numeric
+            kind = incoming_kind
+            continue
+
+        merged_kind = _merge_filter_numeric_kind(
+            kind,
+            incoming_kind,
+            filter_name,
+            selected_path,
+        )
+        description = f"filter {filter_name!r}"
+        aggregate = _coerce_numeric(aggregate, merged_kind, description)
+        numeric = _coerce_numeric(numeric, merged_kind, description)
+        kind = merged_kind
+        try:
+            if filter_name == "sum":
+                aggregate = _apply_promoted_numeric_operator(aggregate, "+", numeric)
+            elif filter_name == "min":
+                aggregate = numeric if numeric < aggregate else aggregate
+            elif filter_name == "max":
+                aggregate = numeric if numeric > aggregate else aggregate
+            else:
+                raise TypeError(f"unsupported numeric aggregate: {filter_name}")
+        except ArithmeticError as error:
+            raise NonFiniteExpressionNumberError(
+                f"filter {filter_name!r} could not produce a finite number"
+            ) from error
+        aggregate = _ensure_finite_expression_number(
+            aggregate,
+            f"filter {filter_name!r}",
+        )
+
+    if aggregate is None:
+        return 0 if filter_name == "sum" else None
+    return aggregate
+
+
+def _evaluate_count_filter(
+    value: Any,
+    column: str | None,
+    collection_expression: Expression,
+) -> int:
+    """Count collection items or present non-null record-column values.
+
+    Args:
+        value: Evaluated ordered collection supplied to ``count``.
+        column: Optional literal top-level record key.
+        collection_expression: Input expression used for value paths.
+
+    Returns:
+        Collection length without a column, otherwise the non-null selected-value count.
+
+    Raises:
+        FilterTypeError: If the input or column-mode row shape is invalid.
+        MissingValueError: If a selected record column is absent.
+    """
+
+    if column is None:
+        if not isinstance(value, (list, tuple)):
             raise FilterTypeError(
-                "filter 'sum' requires numeric values; "
-                f"{selected_path} is {type(selected).__name__}"
+                f"filter 'count' requires an ordered collection; received {type(value).__name__}"
             )
-        if isinstance(selected, Decimal):
-            if contains_float:
-                raise FilterTypeError(
-                    "filter 'sum' cannot mix floating-point and decimal values; "
-                    f"conflict at {selected_path}"
-                )
-            if not contains_decimal:
-                total = Decimal(total)
-                contains_decimal = True
-            total += selected
-            continue
-        if isinstance(selected, float):
-            if contains_decimal:
-                raise FilterTypeError(
-                    "filter 'sum' cannot mix floating-point and decimal values; "
-                    f"conflict at {selected_path}"
-                )
-            if not contains_float:
-                total = float(total)
-                contains_float = True
-            total += selected
-            continue
-        total += selected
-    return total
+        return len(value)
+    return sum(
+        selected is not None
+        for selected, _ in _selected_collection_values(
+            value,
+            column,
+            collection_expression,
+            "count",
+        )
+    )
+
+
+def _require_arithmetic_numeric(value: Any, operator: str, operand: str) -> _NumericValue:
+    """Validate one non-null arithmetic operand as numeric.
+
+    Args:
+        value: Runtime operand value.
+        operator: Arithmetic operator used in diagnostics.
+        operand: Operand label such as ``left`` or ``right``.
+
+    Returns:
+        The validated integer, float, or decimal.
+
+    Raises:
+        ArithmeticTypeError: If ``value`` is not numeric.
+    """
+
+    if isinstance(value, bool) or not isinstance(value, (int, float, Decimal)):
+        raise ArithmeticTypeError(
+            f"operator {operator!r} requires numeric operands; "
+            f"{operand} operand is {type(value).__name__}"
+        )
+    return value
+
+
+def _arithmetic_numeric_kind(
+    left: _NumericValue,
+    right: _NumericValue,
+    operator: str,
+) -> _NumericKind:
+    """Resolve a binary arithmetic numeric family.
+
+    Args:
+        left: Validated left numeric operand.
+        right: Validated right numeric operand.
+        operator: Arithmetic operator used in diagnostics.
+
+    Returns:
+        The common numeric family for the operation.
+
+    Raises:
+        ArithmeticTypeError: If float and decimal operands would be mixed.
+    """
+
+    left_kind = _numeric_kind(left)
+    right_kind = _numeric_kind(right)
+    if {left_kind, right_kind} == {_NumericKind.FLOAT, _NumericKind.DECIMAL}:
+        raise ArithmeticTypeError(
+            f"operator {operator!r} cannot mix floating-point and decimal operands"
+        )
+    if _NumericKind.DECIMAL in {left_kind, right_kind}:
+        return _NumericKind.DECIMAL
+    if _NumericKind.FLOAT in {left_kind, right_kind}:
+        return _NumericKind.FLOAT
+    return _NumericKind.INTEGER
+
+
+def _evaluate_unary_arithmetic(operator: str, value: Any) -> _NumericValue | None:
+    """Evaluate a numeric unary sign with null propagation.
+
+    Args:
+        operator: Unary ``+`` or ``-``.
+        value: Evaluated operand value.
+
+    Returns:
+        Signed numeric value, or null when the operand is null.
+
+    Raises:
+        ArithmeticTypeError: If the operand is not numeric.
+        NonFiniteExpressionNumberError: If the result is non-finite.
+    """
+
+    if value is None:
+        return None
+    numeric = _require_arithmetic_numeric(value, operator, "unary")
+    try:
+        result = +numeric if operator == "+" else -numeric
+    except ArithmeticError as error:
+        raise NonFiniteExpressionNumberError(
+            f"unary operator {operator!r} could not produce a finite number"
+        ) from error
+    return _ensure_finite_expression_number(result, f"unary operator {operator!r}")
+
+
+def _evaluate_binary_arithmetic(
+    left: Any,
+    operator: str,
+    right: Any,
+) -> _NumericValue | None:
+    """Evaluate one numeric binary operation with promotion and null propagation.
+
+    Args:
+        left: Evaluated left operand.
+        operator: Binary ``+``, ``-``, ``*``, or ``/``.
+        right: Evaluated right operand.
+
+    Returns:
+        Promoted numeric result, or null when either operand is null.
+
+    Raises:
+        ArithmeticTypeError: If an operand is not numeric or families cannot mix.
+        DivisionByZeroError: If the divisor is zero.
+        NonFiniteExpressionNumberError: If the result is non-finite.
+    """
+
+    if left is None or right is None:
+        return None
+    left_numeric = _require_arithmetic_numeric(left, operator, "left")
+    right_numeric = _require_arithmetic_numeric(right, operator, "right")
+    kind = _arithmetic_numeric_kind(left_numeric, right_numeric, operator)
+    description = f"operator {operator!r}"
+    left_numeric = _coerce_numeric(left_numeric, kind, description)
+    right_numeric = _coerce_numeric(right_numeric, kind, description)
+    if operator == "/" and right_numeric == 0:
+        raise DivisionByZeroError("division by zero")
+
+    try:
+        result = _apply_promoted_numeric_operator(left_numeric, operator, right_numeric)
+    except ArithmeticError as error:
+        raise NonFiniteExpressionNumberError(
+            f"operator {operator!r} could not produce a finite number"
+        ) from error
+    return _ensure_finite_expression_number(result, f"operator {operator!r}")
 
 
 def _evaluate(expression: Expression, scope: Mapping[str, Any]) -> Any:
@@ -670,7 +1089,12 @@ def _evaluate(expression: Expression, scope: Mapping[str, Any]) -> Any:
         except (IndexError, KeyError, TypeError) as error:
             raise MissingValueError(root, path) from error
     if isinstance(expression, UnaryExpression):
-        return not bool(_evaluate(expression.operand, scope))
+        value = _evaluate(expression.operand, scope)
+        if expression.operator == "not":
+            return not bool(value)
+        if expression.operator in {"+", "-"}:
+            return _evaluate_unary_arithmetic(expression.operator, value)
+        raise TypeError(f"unsupported unary operator: {expression.operator}")
     if isinstance(expression, BinaryExpression):
         left = _evaluate(expression.left, scope)
         if expression.operator == "and":
@@ -678,6 +1102,8 @@ def _evaluate(expression: Expression, scope: Mapping[str, Any]) -> Any:
         if expression.operator == "or":
             return bool(left) or bool(_evaluate(expression.right, scope))
         right = _evaluate(expression.right, scope)
+        if expression.operator in {"+", "-", "*", "/"}:
+            return _evaluate_binary_arithmetic(left, expression.operator, right)
         return {
             "==": lambda: left == right,
             "!=": lambda: left != right,
@@ -711,10 +1137,19 @@ def _evaluate(expression: Expression, scope: Mapping[str, Any]) -> Any:
         if expression.name == "join":
             separator = str(arguments[0]) if arguments else ", "
             return separator.join(str(item) for item in value)
-        if expression.name == "sum":
+        if expression.name in {"sum", "min", "max"}:
             column = arguments[0] if arguments else None
             assert column is None or isinstance(column, str)
-            return _evaluate_sum_filter(value, column, expression.value)
+            return _evaluate_numeric_aggregate_filter(
+                expression.name,
+                value,
+                column,
+                expression.value,
+            )
+        if expression.name == "count":
+            column = arguments[0] if arguments else None
+            assert column is None or isinstance(column, str)
+            return _evaluate_count_filter(value, column, expression.value)
         raise ExpressionEvaluationError(f"unknown filter: {expression.name}")
     raise TypeError(f"unsupported expression node: {type(expression).__name__}")
 

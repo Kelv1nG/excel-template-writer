@@ -242,3 +242,18 @@ def test_reports_invalid_sum_column_at_the_output_cell() -> None:
     assert result.compiled is None
     assert [diagnostic.code for diagnostic in result.diagnostics] == [DiagnosticCode.INVALID_FILTER]
     assert str(result.diagnostics[0].location) == "Report!E6:0"
+
+
+def test_reports_invalid_arithmetic_syntax_at_the_output_cell() -> None:
+    template = WorksheetTemplate.from_cells(
+        "Report",
+        {"F7": "{{ subtotal + }}"},
+    )
+
+    result = compile_sheet(template)
+
+    assert result.compiled is None
+    assert [diagnostic.code for diagnostic in result.diagnostics] == [
+        DiagnosticCode.INVALID_EXPRESSION
+    ]
+    assert str(result.diagnostics[0].location) == "Report!F7:12"

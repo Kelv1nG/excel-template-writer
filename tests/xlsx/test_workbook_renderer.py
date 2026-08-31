@@ -687,14 +687,24 @@ def test_date_filter_writes_text_while_unfiltered_date_remains_native(tmp_path: 
         rendered.close()
 
 
-def test_sum_filter_writes_typed_numeric_totals_with_template_formatting(tmp_path: Path) -> None:
-    template_path = tmp_path / "sum-filter.xlsx"
-    output_path = tmp_path / "sum-filter-output.xlsx"
+def test_aggregate_filters_and_arithmetic_write_typed_values_with_formatting(
+    tmp_path: Path,
+) -> None:
+    template_path = tmp_path / "aggregate-arithmetic.xlsx"
+    output_path = tmp_path / "aggregate-arithmetic-output.xlsx"
     workbook = Workbook()
     sheet = workbook.active
     sheet["A1"] = "{{ amounts | sum }}"
     sheet["B1"] = '{{ rows | sum("amount") }}'
     sheet["B1"].number_format = "$#,##0.00"
+    sheet["C1"] = '{{ rows | min("amount") }}'
+    sheet["D1"] = '{{ rows | max("amount") }}'
+    sheet["E1"] = "{{ rows | count }}"
+    sheet["F1"] = '{{ (rows | max("amount")) - (rows | min("amount")) }}'
+    sheet["F1"].number_format = "$#,##0.00"
+    sheet["G1"] = '{{ empty_rows | max("amount") }}'
+    sheet["H1"] = "{{ ((base + adjustment) * factor - discount) / divisor }}"
+    sheet["H1"].number_format = "0.00"
     _save(workbook, template_path)
 
     render_workbook(
@@ -703,6 +713,12 @@ def test_sum_filter_writes_typed_numeric_totals_with_template_formatting(tmp_pat
         {
             "amounts": [1, None, 2.5],
             "rows": [{"amount": Decimal("12.50")}, {"amount": 2}, {"amount": None}],
+            "empty_rows": [],
+            "base": 100,
+            "adjustment": 20,
+            "factor": 2,
+            "discount": 40,
+            "divisor": 4,
         },
     )
 
@@ -714,6 +730,19 @@ def test_sum_filter_writes_typed_numeric_totals_with_template_formatting(tmp_pat
         assert sheet["B1"].value == 14.5
         assert sheet["B1"].data_type == "n"
         assert sheet["B1"].number_format == "$#,##0.00"
+        assert sheet["C1"].value == 2
+        assert sheet["C1"].data_type == "n"
+        assert sheet["D1"].value == 12.5
+        assert sheet["D1"].data_type == "n"
+        assert sheet["E1"].value == 3
+        assert sheet["E1"].data_type == "n"
+        assert sheet["F1"].value == 10.5
+        assert sheet["F1"].data_type == "n"
+        assert sheet["F1"].number_format == "$#,##0.00"
+        assert sheet["G1"].value is None
+        assert sheet["H1"].value == 50
+        assert sheet["H1"].data_type == "n"
+        assert sheet["H1"].number_format == "0.00"
     finally:
         rendered.close()
 

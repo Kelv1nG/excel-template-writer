@@ -23,9 +23,12 @@ from excel_template_writer.diagnostics import (
     TemplateRenderError,
 )
 from excel_template_writer.expressions import (
+    ArithmeticTypeError,
+    DivisionByZeroError,
     ExpressionEvaluationError,
     FilterTypeError,
     MissingValueError,
+    NonFiniteExpressionNumberError,
     evaluate_expression,
 )
 from excel_template_writer.limits import (
@@ -270,6 +273,27 @@ class _Renderer:
                     part.span.location,
                 )
                 value = None
+            except ArithmeticTypeError as error:
+                self.diagnostic(
+                    DiagnosticCode.ARITHMETIC_TYPE_MISMATCH,
+                    str(error),
+                    part.span.location,
+                )
+                value = None
+            except DivisionByZeroError as error:
+                self.diagnostic(
+                    DiagnosticCode.DIVISION_BY_ZERO,
+                    str(error),
+                    part.span.location,
+                )
+                value = None
+            except NonFiniteExpressionNumberError as error:
+                self.diagnostic(
+                    DiagnosticCode.NON_FINITE_EXPRESSION_NUMBER,
+                    str(error),
+                    part.span.location,
+                )
+                value = None
             except ExpressionEvaluationError as error:
                 self.diagnostic(
                     DiagnosticCode.MISSING_VALUE,
@@ -318,6 +342,27 @@ class _Renderer:
         except FilterTypeError as error:
             self.diagnostic(
                 DiagnosticCode.FILTER_TYPE_MISMATCH,
+                str(error),
+                node.span.location,
+            )
+            return _EVALUATION_FAILED
+        except ArithmeticTypeError as error:
+            self.diagnostic(
+                DiagnosticCode.ARITHMETIC_TYPE_MISMATCH,
+                str(error),
+                node.span.location,
+            )
+            return _EVALUATION_FAILED
+        except DivisionByZeroError as error:
+            self.diagnostic(
+                DiagnosticCode.DIVISION_BY_ZERO,
+                str(error),
+                node.span.location,
+            )
+            return _EVALUATION_FAILED
+        except NonFiniteExpressionNumberError as error:
+            self.diagnostic(
+                DiagnosticCode.NON_FINITE_EXPRESSION_NUMBER,
                 str(error),
                 node.span.location,
             )

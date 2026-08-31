@@ -410,6 +410,8 @@ Proposed initial features:
 - literals: strings, numbers, booleans, and null
 - comparisons
 - boolean operators
+- numeric unary operators: `+` and `-`
+- numeric binary operators: `+`, `-`, `*`, and `/`
 - parentheses
 - filters with literal arguments
 - a small set of pure registered functions, if later justified
@@ -438,6 +440,9 @@ The executable set remains small:
 - `date(format)`
 - `join(separator)`
 - `sum` and `sum(column)`
+- `min` and `min(column)`
+- `max` and `max(column)`
+- `count` and `count(column)`
 
 Filter names and argument contracts are validated during compilation. Filter arguments are literals;
 runtime expressions cannot dynamically select formatting rules. Unknown filters, invalid argument
@@ -488,13 +493,16 @@ The `datetime`, `number`, and `money` filters remain proposed. Their value-versu
 semantics must be resolved independently before implementation; the behavior of `date` must not be
 silently generalized to them.
 
-### 11.2 Numeric summation
+### 11.2 Collection aggregates
 
-The `sum` filter reduces an ordered collection to one canonical numeric scalar. Without an
-argument, each collection item is a candidate numeric value:
+The aggregate filters reduce an ordered collection to one canonical scalar. `sum`, `min`, and
+`max` accept either a collection of numeric values or one literal top-level record key. Without an
+argument, each collection item is a candidate value:
 
 ```text
 {{ amounts | sum }}
+{{ amounts | min }}
+{{ amounts | max }}
 ```
 
 With one string-literal argument, each collection item must be a record and the argument identifies
@@ -502,23 +510,69 @@ one top-level record key to aggregate:
 
 ```text
 {{ lines | sum("amount") }}
+{{ lines | min("amount") }}
+{{ lines | max("amount") }}
 ```
 
-The column argument is a literal key, not an expression or dotted path. It may not begin with `_`.
-A missing key is a missing-value error that identifies the failing collection index and key. A
-non-record collection item in column mode, a boolean, or any non-numeric selected value is a filter
-type error. Strings are never coerced to numbers.
+`count` without an argument returns the number of collection items, including items that are
+`null`. `count(column)` requires record items and returns the number of present, non-null values at
+that key:
 
-Present `null` values are ignored. An empty collection, or a collection containing only `null`
-selected values, returns the integer `0`. A result containing only integers remains an integer;
-integers may be combined with either finite floats or finite decimals, producing that wider numeric
-type. Mixing a float and a decimal in one sum is a filter type error rather than an implicit lossy
-conversion.
+```text
+{{ lines | count }}
+{{ lines | count("amount") }}
+```
 
-Summation preserves input order, performs no sorting, grouping, filtering, or reconciliation, and
-does not mutate the canonical context. It produces one scalar, so it has no effect on lexical scope,
-rectangular geometry, layout measurement, shifting, or workbook-writer behavior. Its traversal is
-bounded by the collection limits already enforced during context normalization.
+Every column argument is a literal key, not an expression or dotted path, and may not begin with
+`_`. A missing key is a missing-value error that identifies the failing collection index and key.
+A non-record collection item in column mode is a filter type error. For `sum`, `min`, and `max`, a
+boolean or any non-numeric selected value is also a filter type error; strings are never coerced to
+numbers. `count(column)` may count a non-null value of any canonical type.
+
+Numeric aggregates ignore present `null` values. `sum` returns integer `0` for an empty or all-null
+selection. `min` and `max` return `null` because no extremum exists. `count` returns integer `0` for
+an empty collection or when `count(column)` selects only nulls. A numeric result containing only
+integers remains an integer; integers may be combined with either finite floats or finite decimals,
+producing that wider numeric type. Mixing a float and a decimal in one aggregate is a filter type
+error rather than an implicit lossy conversion.
+
+Aggregates preserve input order and perform no sorting, grouping, predicate filtering, distinct
+selection, or reconciliation. Each aggregate expression traverses its input independently and does
+not mutate or cache the canonical context. It produces one scalar, so it has no effect on lexical
+scope, rectangular geometry, layout measurement, shifting, or workbook-writer behavior. Traversal
+is bounded by the collection limits already enforced during context normalization.
+
+### 11.3 Numeric arithmetic
+
+The expression language supports unary `+` and `-`, followed by multiplicative `*` and `/`, then
+additive `+` and `-` in standard precedence order. Arithmetic binds more tightly than comparisons,
+which bind more tightly than boolean operators. Operators at the same precedence are
+left-associative. Parentheses may make any order explicit:
+
+```text
+{{ quantity * unit_price + tax }}
+{{ (subtotal - discount) / installment_count }}
+{{ -adjustment }}
+```
+
+The filter pipeline continues to apply to the complete expression on its left. A filtered value
+used as one arithmetic operand must therefore be parenthesized:
+
+```text
+{{ (lines | max("high")) - (lines | min("low")) }}
+```
+
+Arithmetic accepts canonical integers, finite floats, and finite decimals; booleans, strings,
+dates, and collections are not numbers. `+` never concatenates strings or collections. Unary signs
+preserve the operand type. For binary operations, integers may combine with either floats or
+decimals, producing that wider family, while floats and decimals may not mix implicitly. Division
+of integer or float operands returns a float. Division involving a decimal and no float returns a
+decimal.
+
+If either operand of a binary arithmetic expression is present `null`, the result is `null`; null
+is never coerced to zero. Division by zero is an evaluation error. Any operation or aggregate that
+would produce a non-finite float or decimal is also an evaluation error, preserving the canonical
+finite-number boundary. Arithmetic returns one scalar and has no effect on scope or layout.
 
 ## 12. Formulas
 
@@ -852,6 +906,9 @@ Examples:
 - `E1301 MISSING_VALUE`
 - `E1302 COLLECTION_IN_SCALAR_CELL`
 - `E1304 FILTER_TYPE_MISMATCH`
+- `E1305 ARITHMETIC_TYPE_MISMATCH`
+- `E1306 DIVISION_BY_ZERO`
+- `E1307 NON_FINITE_EXPRESSION_NUMBER`
 - `E1401 LAYOUT_COLLISION`
 - `E1402 OVERLAPPING_ROW_SHIFTS`
 - `E2104 MERGE_CROSSES_BLOCK_BOUNDARY`

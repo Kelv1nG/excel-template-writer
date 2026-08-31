@@ -1,5 +1,7 @@
 from datetime import date
 
+import pytest
+
 from excel_template_writer.compiler import compile_sheet
 from excel_template_writer.diagnostics import DiagnosticCode
 from excel_template_writer.model import Coordinate, Rectangle, WorksheetTemplate
@@ -325,6 +327,96 @@ def test_sum_filter_reports_missing_columns_and_type_mismatches_at_the_output_ce
         DiagnosticCode.FILTER_TYPE_MISMATCH
     ]
     assert str(invalid_result.diagnostics[0].location) == "Report!E5:0"
+
+
+def test_aggregate_filters_and_arithmetic_produce_scalar_values_without_layout_changes() -> None:
+    template = WorksheetTemplate.from_rows(
+        "Report",
+        [
+            [
+                '{{ rows | min("amount") }}',
+                '{{ rows | max("amount") }}',
+                "{{ rows | count }}",
+                '{{ (rows | max("amount")) - (rows | min("amount")) }}',
+                '{{ empty_rows | max("amount") }}',
+            ]
+        ],
+    )
+    compiled = compile_sheet(template).require()
+
+    plan = render_sheet(
+        compiled,
+        {
+            "rows": [{"amount": 10}, {"amount": None}, {"amount": 25}],
+            "empty_rows": [],
+        },
+    ).require()
+
+    assert _values_by_coordinate(plan) == {
+        "A1": 10,
+        "B1": 25,
+        "C1": 3,
+        "D1": 15,
+        "E1": None,
+    }
+
+
+def test_numeric_arithmetic_uses_repeat_lexical_scope() -> None:
+    template = WorksheetTemplate.from_rows(
+        "Report",
+        [["{% for line in lines %}{{ line.quantity * line.price }}{% endfor %}"]],
+    )
+    compiled = compile_sheet(template).require()
+
+    plan = render_sheet(
+        compiled,
+        {
+            "lines": [
+                {"quantity": 2, "price": 5},
+                {"quantity": 3, "price": 4},
+            ]
+        },
+    ).require()
+
+    assert _values_by_coordinate(plan) == {"A1": 10, "A2": 12}
+
+
+@pytest.mark.parametrize(
+    ("expression", "context", "code"),
+    [
+        (
+            "left + right",
+            {"left": "1", "right": 2},
+            DiagnosticCode.ARITHMETIC_TYPE_MISMATCH,
+        ),
+        (
+            "left / right",
+            {"left": 1, "right": 0},
+            DiagnosticCode.DIVISION_BY_ZERO,
+        ),
+        (
+            "left * right",
+            {"left": 1e308, "right": 10.0},
+            DiagnosticCode.NON_FINITE_EXPRESSION_NUMBER,
+        ),
+    ],
+)
+def test_arithmetic_failures_report_stable_diagnostics_at_the_output_cell(
+    expression: str,
+    context: dict[str, object],
+    code: DiagnosticCode,
+) -> None:
+    template = WorksheetTemplate.from_cells(
+        "Report",
+        {"F6": f"{{{{ {expression} }}}}"},
+    )
+    compiled = compile_sheet(template).require()
+
+    result = render_sheet(compiled, context)
+
+    assert result.plan is None
+    assert [diagnostic.code for diagnostic in result.diagnostics] == [code]
+    assert str(result.diagnostics[0].location) == "Report!F6:0"
 
 
 def test_nested_repeats_are_evaluated_from_the_ast_scope_tree() -> None:
