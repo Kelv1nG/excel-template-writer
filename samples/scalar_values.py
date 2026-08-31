@@ -38,8 +38,8 @@ def build_template(path: Path = TEMPLATE_PATH) -> Path:
     prepare_sheet(
         sheet,
         "Scalar values and expressions",
-        "Single-expression cells preserve types; mixed content becomes text; filters are explicit.",
-        widths=(22, 34, 25),
+        "Typed expressions support explicit filters, collection aggregates, and basic arithmetic.",
+        widths=(24, 62, 34),
     )
     sheet.append(["Case", "Template value", "Expected behavior"])
     paint(sheet, "A4:C4", fill=LIGHT_BLUE, bold=True, horizontal="center")
@@ -68,6 +68,20 @@ def build_template(path: Path = TEMPLATE_PATH) -> Path:
             '{{ lines | sum("amount") }}',
             "literal column key; native number: 150",
         ),
+        ("Record-column minimum", '{{ lines | min("amount") }}', "nulls skipped: 50"),
+        ("Record-column maximum", '{{ lines | max("amount") }}', "nulls skipped: 100"),
+        ("Record count", "{{ lines | count }}", "all records counted: 3"),
+        (
+            "Aggregate arithmetic",
+            '{{ (lines | max("amount")) - (lines | min("amount")) }}',
+            "parenthesized filtered operands: 50",
+        ),
+        (
+            "Basic arithmetic",
+            "{{ ((math.base + math.adjustment) * math.factor - math.discount) / math.divisor }}",
+            "standard precedence: 50",
+        ),
+        ("Unary signs", "{{ -math.adjustment + +math.base }}", "native number: 80"),
         ("Default filter", '{{ missing | default("not supplied") }}', "explicit fallback"),
     )
     for row_number, values in enumerate(rows, start=5):
@@ -79,6 +93,8 @@ def build_template(path: Path = TEMPLATE_PATH) -> Path:
     sheet["B7"].number_format = '$#,##0.00;[Red]-$#,##0.00;"-"'
     sheet["B8"].number_format = "yyyy-mm-dd"
     sheet["B16"].number_format = '$#,##0.00;[Red]-$#,##0.00;"-"'
+    for coordinate in ("B17", "B18", "B20", "B21"):
+        sheet[coordinate].number_format = '$#,##0.00;[Red]-$#,##0.00;"-"'
     result = atomic_save(workbook, path)
     workbook.close()
     return result
@@ -113,6 +129,13 @@ def render_sample(
             "labels": ["priority", "renewal"],
             "amounts": [10, None, 15],
             "lines": [{"amount": 100}, {"amount": None}, {"amount": 50}],
+            "math": {
+                "base": 100,
+                "adjustment": 20,
+                "factor": 2,
+                "discount": 40,
+                "divisor": 4,
+            },
         },
     )
     assert_no_template_tags(output_path)
@@ -134,7 +157,19 @@ def render_sample(
         assert sheet["B16"].value == 150
         assert sheet["B16"].data_type == "n"
         assert sheet["B16"].number_format == '$#,##0.00;[Red]-$#,##0.00;"-"'
-        assert sheet["B17"].value == "not supplied"
+        assert sheet["B17"].value == 50
+        assert sheet["B17"].data_type == "n"
+        assert sheet["B18"].value == 100
+        assert sheet["B18"].data_type == "n"
+        assert sheet["B19"].value == 3
+        assert sheet["B19"].data_type == "n"
+        assert sheet["B20"].value == 50
+        assert sheet["B20"].data_type == "n"
+        assert sheet["B21"].value == 50
+        assert sheet["B21"].data_type == "n"
+        assert sheet["B22"].value == 80
+        assert sheet["B22"].data_type == "n"
+        assert sheet["B23"].value == "not supplied"
     finally:
         workbook.close()
     return output_path

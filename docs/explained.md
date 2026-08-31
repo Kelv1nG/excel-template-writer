@@ -154,6 +154,11 @@ Non-string cells bypass the text lexer and become literal typed cell parts.
 
 The engine does not call Python `eval`. Property lookup operates on mappings, private names beginning with `_` are forbidden, and arbitrary function or method calls are not in the grammar. This is both a security boundary and a language-stability boundary.
 
+Numeric unary and binary operators reuse `UnaryExpression` and `BinaryExpression`. The parser owns
+their precedence: unary signs bind first, followed by multiplication/division,
+addition/subtraction, comparisons, and boolean operators. Filter pipelines retain their existing
+outer precedence, so a filtered arithmetic operand is explicitly parenthesized.
+
 Expression parsing is followed by semantic compilation. This pass resolves the allowlisted filter
 name, checks its literal argument contract, and lowers filters that need typed state. In particular,
 `date("yyyy-mm")` becomes a `DateFormatExpression` containing the value expression and an immutable
@@ -275,8 +280,9 @@ Each `ExpressionPart` is evaluated against the current lexical scope.
 - A cell containing one expression preserves its native value type.
 - A cell mixing literal text and expressions becomes text.
 - A compiled `date` filter deterministically returns text; an unfiltered native date remains typed.
-- A `sum` filter reduces a numeric collection, or one literal key from a collection of records, to
-  one typed numeric scalar.
+- `sum`, `min`, `max`, and `count` reduce a collection, or one literal record key, to one typed
+  scalar.
+- Numeric `+`, `-`, `*`, `/`, and unary signs produce typed scalars and propagate present nulls.
 - A collection used directly as a scalar is an error.
 - A missing value is an error unless handled by `default` or by the special empty-repeat placeholder behavior.
 
@@ -286,10 +292,17 @@ numbers, and null are rejected with a filter-type diagnostic at the originating 
 Formatting a date has no spatial effect: its resulting string participates in ordinary cell text
 assembly and the existing text-length limit.
 
-`sum` accepts zero or one compile-time literal argument. It skips present nulls, rejects booleans
-and other non-numeric values, and reports a missing selected record key separately from a type
-mismatch. The reduction traverses the already-normalized finite collection and returns one scalar,
-so it introduces no layout, scope, or workbook-writer behavior.
+The aggregate filters accept zero or one compile-time literal column argument. Numeric reducers
+skip present nulls, reject booleans and other non-numeric values, and report a missing selected
+record key separately from a type mismatch. `count` counts either all items or present non-null
+column values. Each reduction traverses the already-normalized finite collection and returns one
+scalar, so it introduces no layout, scope, or workbook-writer behavior.
+
+Arithmetic is evaluated by engine-owned numeric promotion rules rather than delegated implicitly
+to Python. Integers may widen to float or decimal, float and decimal cannot mix, and strings never
+participate. Division by zero, wrong operand types, and non-finite derived results have distinct
+cell-located diagnostics. Arithmetic also produces no layout or writer behavior; the resulting
+typed value flows through the ordinary planned-cell path.
 
 ### Recursive block measurement
 
@@ -431,7 +444,7 @@ the hosting platform.
 
 The executable system currently supports vertical repeats, explicit vertical isolation regions,
 row/cell shifts, scalar output, a small safe expression language with deterministic date-to-text
-formatting and numeric summation, empty repeat placeholders,
+formatting, collection aggregates, and basic numeric arithmetic, empty repeat placeholders,
 nested regions, stacked conditions, direct
 cell formatting, styled blanks, row/column properties, merged ranges, fixed-reference
 template-authored worksheet charts, template-authored embedded PNG/JPEG pictures,

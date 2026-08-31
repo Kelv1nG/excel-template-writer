@@ -47,6 +47,14 @@ plan = render_sheet(
 
 Compilation and rendering return structured diagnostics; `.require()` raises an exception only when a caller prefers exception-based control flow.
 
+Table-shaped collections support the scalar reducers `sum`, `min`, `max`, and `count`, each with an
+optional literal record-column name. Numeric expressions also support unary signs and `+`, `-`,
+`*`, and `/`. Parenthesize filtered operands when combining aggregate results:
+
+```text
+{{ (rows | max("amount")) - (rows | min("amount")) }}
+```
+
 Render contexts use ordinary Python values—no `TypedValue` wrapper is required. Supported values
 are null, strings, booleans, integers, finite floats and decimals, timezone-naive dates/times,
 string-keyed mappings, and ordered lists or tuples. Before evaluation, `normalize_context()` makes

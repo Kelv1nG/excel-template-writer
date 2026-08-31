@@ -88,6 +88,8 @@ The current expression language supports:
 | Null literal | `null`, `none` |
 | Comparison | `total >= 100`, `status == "open"` |
 | Boolean operators | `active and paid`, `vip or staff`, `not disabled` |
+| Numeric unary operators | `-adjustment`, `+amount` |
+| Numeric arithmetic | `quantity * price + tax`, `(total - discount) / parts` |
 | Parentheses | `(active or vip) and paid` |
 | Filter pipeline | `name \| upper` |
 
@@ -163,6 +165,9 @@ Private names or keys beginning with `_`, imports, assignment, comprehensions, l
 | `join(separator)` | Join collection items as text. The default separator is `", "`. | `labels \| join(" / ")` |
 | `date(format)` | Format a native date or datetime as deterministic text. | `report_date \| date("dd mmmm yyyy")` |
 | `sum` | Add numeric collection items, or add one numeric record column named by a literal argument. | `lines \| sum("amount")` |
+| `min` | Return the lowest non-null numeric item or record-column value. | `lines \| min("amount")` |
+| `max` | Return the highest non-null numeric item or record-column value. | `lines \| max("amount")` |
+| `count` | Count collection items, or non-null values in a literal record column. | `lines \| count("amount")` |
 
 Filter names, argument counts, and literal argument types are checked while compiling the template.
 Unknown filters and dynamic arguments such as `date(format_variable)` are errors. The filters
@@ -214,29 +219,71 @@ native Excel date, keep the expression unfiltered and format the placeholder cel
 For example, the Excel custom number format `"For the month ending "dd mmmm yyyy` displays a full
 label while preserving the underlying date value.
 
-#### `sum` and `sum(column)`
+#### Collection aggregates
 
-Use `sum` without an argument to add an ordered collection of numbers:
+Use `sum`, `min`, or `max` without an argument to reduce an ordered numeric collection:
 
 ```text
 {{ amounts | sum }}
+{{ amounts | min }}
+{{ amounts | max }}
 ```
 
-Pass one literal column name to add that top-level key from every record in a table-shaped
+Pass one literal column name to reduce that top-level key from every record in a table-shaped
 collection:
 
 ```text
 {{ lines | sum("amount") }}
+{{ lines | min("amount") }}
+{{ lines | max("amount") }}
 ```
 
-The column name is a literal key, not a dotted path or dynamic expression. Every collection item
-must be a record containing that key. A missing key reports `E1301`; a non-record item, boolean,
-string, or other non-numeric selected value reports `E1304`. Numeric strings are not converted.
+`count` without an argument counts every collection item, including null items. `count(column)`
+requires records and counts present non-null values at that literal key:
 
-Present `null` values are skipped. Empty and all-null inputs return the integer `0`. Integers may be
-combined with floats or decimals, but floats and decimals cannot appear in the same sum because the
-engine will not choose a lossy conversion. The result remains a numeric cell, so Excel formatting
-comes from the template cell as usual.
+```text
+{{ lines | count }}
+{{ lines | count("amount") }}
+```
+
+Column names are literal keys, not dotted paths or dynamic expressions. Every collection item must
+be a record containing the selected key. A missing key reports `E1301`; a non-record item reports
+`E1304`. `sum`, `min`, and `max` also report `E1304` for booleans, strings, and other non-numeric
+selected values. Numeric strings are not converted.
+
+Numeric aggregates skip present `null` values. Empty and all-null `sum` inputs return integer `0`;
+empty and all-null `min` or `max` inputs return `null`, producing a blank sole-expression cell.
+`count` returns integer `0` for an empty selection. Integers may combine with floats or decimals,
+but floats and decimals cannot appear in one numeric aggregate because the engine will not choose a
+lossy conversion. Numeric results retain template-controlled Excel formatting.
+
+#### Numeric arithmetic
+
+The expression language supports unary signs and the four basic numeric operators:
+
+```text
+{{ -adjustment }}
+{{ quantity * unit_price + tax }}
+{{ (subtotal - discount) / installment_count }}
+```
+
+Standard precedence applies: unary signs, then `*` and `/`, then `+` and `-`, then comparisons and
+boolean operators. Operators at the same level evaluate left to right. Use `*`, not the letter `x`,
+for multiplication.
+
+The filter pipeline applies to the complete expression on its left. Parenthesize each filtered
+operand when combining aggregate results:
+
+```text
+{{ (lines | max("high")) - (lines | min("low")) }}
+```
+
+Arithmetic accepts integers, finite floats, and finite decimals. It does not coerce booleans or
+strings, and `+` does not concatenate text or collections. Integers may combine with floats or
+decimals; floats and decimals may not mix. Integer or float division returns a float, while decimal
+division returns a decimal. A present null operand propagates to a null result instead of becoming
+zero. Invalid operand types report `E1305`, division by zero reports `E1306`, and a non-finite
+derived number reports `E1307`.
 
 ## `for` and `endfor`
 
@@ -563,6 +610,9 @@ than `rows` or `cells` are rejected during compilation.
 | `E1302` | Collection used as a scalar cell value |
 | `E1303` | `for` expression did not produce a supported collection |
 | `E1304` | Runtime value has the wrong type for a compiled filter |
+| `E1305` | Runtime value has the wrong type for numeric arithmetic |
+| `E1306` | Numeric division used a zero divisor |
+| `E1307` | An expression operation produced a non-finite number |
 | `E1401` | Two source allocations collided at one destination cell |
 | `E1402` | Sibling blocks have conflicting whole-row shift lanes |
 | `E1501` | Render context root is not a mapping |
