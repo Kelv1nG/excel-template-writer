@@ -772,6 +772,45 @@ def test_repeats_blank_cells_that_carry_formatting(tmp_path: Path) -> None:
         rendered.close()
 
 
+def test_repeats_directive_only_cells_with_their_fill_and_border(tmp_path: Path) -> None:
+    template_path = tmp_path / "directive-only-styles.xlsx"
+    output_path = tmp_path / "directive-only-styles-output.xlsx"
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet["A1"] = "{% for item in items %}"
+    sheet["B1"] = "{{ item }}"
+    sheet["C1"] = "{% endfor %}"
+
+    thin = Side(style="thin", color="FFD9E1F2")
+    for cell in sheet[1]:
+        cell.fill = PatternFill("solid", fgColor="FFFFFFFF")
+        cell.border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    _save(workbook, template_path)
+
+    render_workbook(template_path, output_path, {"items": ["One", "Two", "Three", "Four"]})
+
+    rendered = load_workbook(output_path)
+    try:
+        sheet = rendered.active
+        assert [sheet[f"B{row}"].value for row in range(1, 5)] == [
+            "One",
+            "Two",
+            "Three",
+            "Four",
+        ]
+        for row in range(1, 5):
+            for column in "ABC":
+                cell = sheet[f"{column}{row}"]
+                assert cell.fill.fill_type == "solid"
+                assert cell.fill.fgColor.rgb == "FFFFFFFF"
+                assert cell.border.left.style == "thin"
+                assert cell.border.right.style == "thin"
+                assert cell.border.top.style == "thin"
+                assert cell.border.bottom.style == "thin"
+    finally:
+        rendered.close()
+
+
 def test_cell_shift_region_moves_its_full_formatted_band_and_keeps_adjacent_cells(
     tmp_path: Path,
 ) -> None:

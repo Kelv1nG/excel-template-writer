@@ -603,6 +603,10 @@ A formatted blank cell is a material template cell. It participates in source-to
 mapping and is copied even though its value is blank. This is required for continuous fills,
 borders, alignment, protected entry areas, and merged-range presentation.
 
+A cell containing only structural directive text remains a material blank cell after the
+directive is removed. Its direct formatting is copied exactly like any other formatted blank;
+removing template syntax must not expose Excel's default fill or borders.
+
 Formatting is copied exactly per source cell and per repeated instance. The engine does not
 recompute outer borders, alternating stripes, first/last-row styles, or other contextual table
 effects. Such behavior requires an explicit future language feature rather than inference.

@@ -232,7 +232,7 @@ class _Renderer:
         scope: Mapping[str, Any],
         missing_roots: frozenset[str],
         path: tuple[int, ...],
-    ) -> PlannedCell | None:
+    ) -> PlannedCell:
         """Evaluate one compiled cell in the current lexical scope.
 
         Args:
@@ -242,11 +242,12 @@ class _Renderer:
             path: Nested repeat instance indexes for provenance.
 
         Returns:
-            A planned cell, or ``None`` when the source cell has no output parts.
+            A planned cell. Directive-only cells produce a blank planned value so
+            their source presentation remains material after marker removal.
         """
 
         if not cell.parts:
-            return None
+            return PlannedCell(cell.coordinate, None, cell.coordinate, path)
         values: list[Any] = []
         for part in cell.parts:
             if isinstance(part, LiteralPart):
@@ -626,8 +627,6 @@ class _Renderer:
             if any(child.rectangle.contains_coordinate(source_coordinate) for child in children):
                 continue
             planned = self.render_cell(cell, scope, missing_roots, path)
-            if planned is None:
-                continue
             local = Coordinate(
                 source_coordinate.row - rectangle.top + 1,
                 source_coordinate.column - rectangle.left + 1,

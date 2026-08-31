@@ -73,6 +73,25 @@ def test_empty_collection_keeps_one_blank_formatted_instance() -> None:
     assert plan.height == 1
 
 
+def test_directive_only_boundary_cells_remain_material_after_tag_removal() -> None:
+    template = WorksheetTemplate.from_rows(
+        "Report",
+        [["{% for item in items %}", "{{ item }}", "{% endfor %}"]],
+    )
+    compiled = compile_sheet(template).require()
+
+    plan = render_sheet(compiled, {"items": ["One", "Two"]}).require()
+
+    assert _values_by_coordinate(plan) == {
+        "A1": None,
+        "B1": "One",
+        "C1": None,
+        "A2": None,
+        "B2": "Two",
+        "C2": None,
+    }
+
+
 def test_cell_shift_grows_only_the_repeated_lane() -> None:
     template = WorksheetTemplate.from_rows(
         "Report",
@@ -222,7 +241,11 @@ def test_condition_selects_and_compacts_the_matching_branch() -> None:
     false_plan = render_sheet(compiled, {"taxable": False, "amount": 25}).require()
 
     assert _values_by_coordinate(true_plan) == {"A1": "Tax", "B1": 25, "A2": "Footer"}
-    assert _values_by_coordinate(false_plan) == {"A1": "Not taxable", "A2": "Footer"}
+    assert _values_by_coordinate(false_plan) == {
+        "A1": "Not taxable",
+        "B1": None,
+        "A2": "Footer",
+    }
 
 
 def test_scalar_cell_keeps_excel_compatible_native_value() -> None:
@@ -447,9 +470,11 @@ def test_nested_repeats_are_evaluated_from_the_ast_scope_tree() -> None:
         "A1": "First",
         "A2": "A",
         "A3": "B",
+        "B3": None,
         "A4": "--",
         "A5": "Second",
         "A6": "C",
+        "B7": None,
         "A7": "--",
     }
 
@@ -474,6 +499,7 @@ def test_condition_inherits_cell_shift_isolation_from_its_container() -> None:
         "A1": "Entry",
         "A2": "Tail",
         "B2": "Keeps row",
+        "B3": None,
     }
 
 
