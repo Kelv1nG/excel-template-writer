@@ -93,6 +93,10 @@ assert its stable diagnostic code and either its source location or canonical co
 - Reopen rendered workbooks and verify values, types, styles, dimensions, merges, supported chart
   properties, image and text-shape anchors, static shape content, drawing order, and embedded-media
   bytes.
+- For any change that removes directive text, repeats cells, or shifts layout, assert direct fill
+  and border properties after save/reload at representative rendered, directive-only, formatted
+  blank, shifted, and unaffected cells. Value-only assertions do not prove presentation
+  preservation and can miss cells that silently revert to Excel's default appearance.
 - Inspect OOXML parts only when the public workbook model cannot prove the behavior.
 
 ## Maintained user samples

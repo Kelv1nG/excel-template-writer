@@ -117,6 +117,34 @@ def _build_empty_sheet(workbook: Workbook) -> None:
     )
 
 
+def _build_directive_style_sheet(workbook: Workbook) -> None:
+    """Show that directive-only cells retain presentation after tag removal.
+
+    Args:
+        workbook: Workbook receiving the worksheet.
+    """
+
+    sheet = workbook.create_sheet("Directive-only styles")
+    prepare_sheet(
+        sheet,
+        "Directive-only cells remain formatted blanks",
+        "The opening and closing tag cells keep their authored white fill and borders.",
+        widths=(18, 32, 18),
+    )
+    sheet["A4"] = "{% for item in style_rows %}"
+    sheet["B4"] = "{{ item }}"
+    sheet["C4"] = "{% endfor %}"
+    paint(sheet, "A4:C4", fill=WHITE, horizontal="center")
+    merge_band(
+        sheet,
+        "A5:C5",
+        "Footer moves below all four fully formatted rows",
+        fill=LIGHT_GOLD,
+        bold=True,
+        horizontal="center",
+    )
+
+
 def build_template(path: Path = TEMPLATE_PATH) -> Path:
     """Build the complete repeated-blocks template workbook.
 
@@ -132,6 +160,7 @@ def build_template(path: Path = TEMPLATE_PATH) -> Path:
     _build_table_sheet(workbook)
     _build_list_sheet(workbook)
     _build_empty_sheet(workbook)
+    _build_directive_style_sheet(workbook)
     result = atomic_save(workbook, path)
     workbook.close()
     return result
@@ -172,6 +201,7 @@ def render_sample(
             ],
             "tags": ["priority", "renewal", "enterprise"],
             "empty_rows": [],
+            "style_rows": ["One", "Two", "Three", "Four"],
         },
     )
     assert_no_template_tags(output_path)
@@ -196,6 +226,23 @@ def render_sample(
         assert empty["A4"].value is None
         assert empty["B4"].fill.fgColor.rgb == LIGHT_GOLD
         assert empty["C4"].value == "STATIC PLACEHOLDER"
+        directive_styles = workbook["Directive-only styles"]
+        assert [directive_styles[f"B{row}"].value for row in range(4, 8)] == [
+            "One",
+            "Two",
+            "Three",
+            "Four",
+        ]
+        for row in range(4, 8):
+            for column in "ABC":
+                cell = directive_styles[f"{column}{row}"]
+                assert cell.fill.fill_type == "solid"
+                assert cell.fill.fgColor.rgb == WHITE
+                assert cell.border.left.style == "thin"
+                assert cell.border.right.style == "thin"
+                assert cell.border.top.style == "thin"
+                assert cell.border.bottom.style == "thin"
+        assert directive_styles["A8"].value.startswith("Footer moves")
     finally:
         workbook.close()
     return output_path
