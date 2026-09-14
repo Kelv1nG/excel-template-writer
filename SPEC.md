@@ -23,6 +23,9 @@ The language is declarative and Jinja-like, but its execution model is spatial. 
 - The render context is presentation-ready: the renderer does not infer fields from headers, sort collections, or perform keyed merging, joins, or reconciliation.
 - Vertical repeats insert complete rows by default. Authors can select a narrower shift policy explicitly.
 - An empty repeat retains one blank formatted instance of its source block.
+- Missing output values are errors by default. A render-scoped policy may instead blank or preserve
+  only output tags whose evaluation raises an unhandled missing-value error, with a warning for
+  every recovered tag.
 - Conditions are required in the first usable language release.
 - The first usable release supports vertical (`down`) repetition; horizontal repetition follows after the vertical model is proven.
 - Conditional branches are vertically stacked, equal-width rectangles in the first usable release.
@@ -85,7 +88,9 @@ The engine must parse and validate the complete template and compute the output 
 
 ### 5.5 Fail visibly
 
-Ambiguous geometry, overlapping regions, illegal merges, missing values, and collisions are errors by default. Silent overwriting is not permitted.
+Ambiguous geometry, overlapping regions, illegal merges, missing values, and collisions are errors
+by default. The explicit missing-output policy in section 9.7 may recover only an unhandled missing
+value in an output tag; it does not suppress any other failure. Silent overwriting is not permitted.
 
 ## 6. Template authoring model
 
@@ -106,6 +111,10 @@ Invoice {{ invoice.number }}
 ```
 
 If the first example evaluates to a number, date, datetime, boolean, or blank, that type is written directly to Excel. The second example always produces text because it mixes literal text and an expression.
+
+If an output expression cannot resolve a referenced name, property, or index, the render-scoped
+`MissingOutputPolicy` in section 9.7 determines whether that output tag is an error, becomes blank,
+or remains visible as its exact authored tag text.
 
 ### 6.2 Rectangular repeat blocks
 
@@ -233,6 +242,11 @@ An empty collection retains exactly one instance of the source block.
 - The loop body is not considered to have executed, and no item variable is added to the ordinary evaluation scope.
 
 A later explicit `empty` branch may replace this default instance with content such as “No records.”
+
+This rule applies only when the controlling expression successfully evaluates to a present, empty
+ordered collection. A missing `for` collection is an error under every `MissingOutputPolicy`; it is
+never inferred to mean an empty collection. A present `null` or another non-collection value remains
+a collection-type error.
 
 ### 8.6 Layout planning
 
@@ -390,13 +404,44 @@ particular template, before evaluation begins.
 
 ### 9.7 Missing values
 
-A missing name or property is an error by default. A `default` filter may handle absence intentionally:
+A name, property, or index that cannot be resolved raises `MissingValueError`. Missing is evaluator
+state, not the canonical `null` value. A `default` filter may handle absence intentionally:
 
 ```text
 {{ customer.phone | default("—") }}
 ```
 
-This distinguishes missing data from present-but-null data.
+`default` handles the missing value before any render policy is applied. A handled absence produces
+the authored fallback and no missing-output diagnostic. A present `null` remains `null`; it does not
+select the fallback. This preserves the distinction between missing data and present-but-null data.
+
+An unhandled `MissingValueError` raised while evaluating a `{{ ... }}` output tag is governed by the
+render-scoped `MissingOutputPolicy`:
+
+| Value | Output-tag behavior |
+| --- | --- |
+| `error` | The default. Emit `E1301 MISSING_VALUE`; the render has an error and returns no successful plan or workbook. |
+| `blank` | Replace the failed output tag with a blank value and emit nonfatal `W1301 MISSING_VALUE_RENDERED`. |
+| `preserve` | Replace the failed output tag with its exact original source substring, including its braces and authored spacing, and emit nonfatal `W1301 MISSING_VALUE_RENDERED`. |
+
+The policy is applied to one complete output tag at a time:
+
+- A compound output expression is recovered as one unit. For example, if evaluating
+  `{{ quantity * missing_price }}` raises `MissingValueError`, `blank` blanks that whole tag and
+  `preserve` retains that whole exact tag; the engine never emits a partial expression result.
+- In a mixed cell, only the failed output-tag segment is replaced. Under `blank`, the segment
+  contributes an empty string while surrounding literal text and successful output tags remain.
+  Under `preserve`, the exact tag substring occupies that segment.
+- When the failed tag is the sole cell content, `blank` assigns `None`, producing an ordinary blank
+  Excel cell while retaining the source cell's presentation. `preserve` assigns the exact tag
+  substring as text.
+
+The policy catches only `MissingValueError` at an output-tag boundary. Missing values in controlling
+expressions such as a `for` collection or an `if` condition remain `E1301` errors under all three
+policies because treating them as empty or false would silently change layout. Invalid syntax,
+unknown filters, filter and arithmetic type errors, division by zero, non-finite results, collection
+misuse, layout failures, and every other non-missing error remain fatal. The empty-repeat placeholder
+behavior in section 8.5 is separate and does not produce `W1301` for its deliberately absent item.
 
 ## 10. Expression language
 
@@ -461,7 +506,8 @@ For the month ending {{ report_date | date("dd mmmm yyyy") }}
 The filter requires exactly one string-literal format argument. It accepts canonical `date` and
 `datetime` values and always returns text. A `datetime` contributes its calendar-date fields; its
 time portion is not rendered. Strings are not parsed as dates, numbers are not interpreted as Excel
-date serials, and `null` is a type error. A missing input remains a missing-value error.
+date serials, and `null` is a type error. A missing input raises `MissingValueError`; when `date` is
+inside an output tag, section 9.7 governs that otherwise unhandled missing value.
 
 The date format is a case-insensitive, deliberately constrained subset of Excel date-format codes:
 
@@ -524,7 +570,9 @@ that key:
 ```
 
 Every column argument is a literal key, not an expression or dotted path, and may not begin with
-`_`. A missing key is a missing-value error that identifies the failing collection index and key.
+`_`. A missing key raises `MissingValueError` and identifies the failing collection index and key;
+when the aggregate is inside an output tag, section 9.7 governs that otherwise unhandled missing
+value.
 A non-record collection item in column mode is a filter type error. For `sum`, `min`, and `max`, a
 boolean or any non-numeric selected value is also a filter type error; strings are never coerced to
 numbers. `count(column)` may count a non-null value of any canonical type.
@@ -782,6 +830,10 @@ Without an `else`, the `if` and `endif` markers are the top-left and bottom-righ
 
 Only the selected branch contributes cells and measured height. Removing the unselected branch closes the vertical gap according to the containing shift policy. Each branch follows the same containment, merge, measurement, shift, and collision rules as a repeat body.
 
+The condition must evaluate successfully. A missing name, property, or index in the controlling
+expression is an `E1301 MISSING_VALUE` error under every `MissingOutputPolicy`; it is never inferred
+to be false or replaced with preserved tag text.
+
 Potential later constructs:
 
 - an empty branch for repeats
@@ -813,7 +865,11 @@ The reader is the only layer directly coupled to `openpyxl` input objects.
 
 ### 15.2 Lexer
 
-Tokenizes each text cell into literal text, output expressions, opening directives, and closing directives. Every token carries a source span containing workbook, sheet, cell coordinate, and character offsets.
+Tokenizes each text cell into literal text, output expressions, opening directives, and closing
+directives. Every token carries a source span containing workbook, sheet, cell coordinate, and
+character offsets. An output token's span covers its complete original tag so the `preserve`
+missing-output policy can recover the exact authored braces and spacing from the immutable source
+cell without reconstructing the tag.
 
 ### 15.3 Parser
 
@@ -853,13 +909,21 @@ Representative AST nodes:
 - `ElseNode`
 - later: `ImageNode`
 
-Structural nodes contain a source rectangle, options, scope, and child nodes. Expression nodes contain parsed expressions rather than raw strings.
+Structural nodes contain a source rectangle, options, scope, and child nodes. Expression nodes
+contain parsed expressions rather than raw strings. An `OutputNode` additionally retains the source
+span that delimits its complete authored tag; missing-output preservation reads that substring from
+the immutable source cell, while evaluation still uses only the parsed AST.
 
 Evaluation produces a render/layout IR rather than immediately writing cells. The IR records evaluated values, measured rectangles, instance paths, source-to-destination mappings, merges, and planned shifts.
 
 ### 15.7 Evaluator
 
 Evaluates expressions against lexical scopes. A loop adds its item variable and loop metadata to a child scope without mutating its parent.
+
+The evaluator applies `MissingOutputPolicy` only after an unhandled `MissingValueError` reaches an
+`OutputNode`. This boundary lets `default` consume missing values first, preserves whole-tag
+recovery for compound expressions, and prevents the policy from affecting `ForNode` or `IfNode`
+control flow.
 
 Suggested loop metadata:
 
@@ -891,7 +955,7 @@ Diagnostics are first-class values, not only exception strings.
 
 Each diagnostic includes:
 
-- stable error code
+- stable diagnostic code
 - severity: error or warning
 - human-readable message
 - worksheet name
@@ -908,6 +972,7 @@ Examples:
 - `E1203 AMBIGUOUS_BLOCK_PAIRING`
 - `E1205 PARTIAL_BLOCK_OVERLAP`
 - `E1301 MISSING_VALUE`
+- `W1301 MISSING_VALUE_RENDERED`
 - `E1302 COLLECTION_IN_SCALAR_CELL`
 - `E1304 FILTER_TYPE_MISMATCH`
 - `E1305 ARITHMETIC_TYPE_MISMATCH`
@@ -918,7 +983,10 @@ Examples:
 - `E2104 MERGE_CROSSES_BLOCK_BOUNDARY`
 - `E3101 FORMULA_REQUIRES_UNSUPPORTED_TRANSFORM`
 
-Rendering is atomic: any error prevents an output workbook from being returned as successful.
+Rendering is atomic with respect to errors: any error prevents an output workbook from being
+returned as successful. Warnings do not prevent a plan or workbook from being returned. A render
+using `MissingOutputPolicy.BLANK` or `.PRESERVE` therefore succeeds when its only diagnostics are
+`W1301` warnings produced by recovered output tags.
 
 ## 17. Security
 
@@ -979,6 +1047,11 @@ and sheet count are bounded without interpreting worksheet layout.
 
 The precise host API is intentionally deferred, but the core boundary should accept workbook bytes or a seekable binary stream plus normalized data and options, and return workbook bytes plus diagnostics and metadata.
 
+`MissingOutputPolicy` is a string-valued render option with `error`, `blank`, and `preserve` values.
+The public `missing_output` argument defaults to `error` and is passed consistently through sheet
+and workbook rendering. It affects evaluation and planned cell values only; it does not change
+compilation, context normalization, geometry, shifting, or workbook serialization rules.
+
 File paths are convenience adapters, not the core abstraction.
 
 The core operations are conceptually:
@@ -1001,6 +1074,10 @@ A compiled template may be cacheable if it does not retain mutable `openpyxl` ob
 - invalid grammar diagnostics
 - block pairing and spatial containment tests
 - name scope and type tests
+- all missing-output policies for sole, mixed, multiple, and compound output tags
+- exact source-tag preservation, including noncanonical interior spacing
+- `default` precedence, present-null behavior, strict `for`/`if` control expressions, and `W1301`
+  warning severity and source locations
 
 ### 19.2 Layout tests
 
@@ -1013,6 +1090,7 @@ A compiled template may be cacheable if it does not retain mutable `openpyxl` ob
 - cell, row, and column expansion
 - collision detection
 - merged-range transforms
+- successful planning with missing-output warnings and fatal handling of every non-missing error
 
 Most layout tests should operate without `openpyxl`.
 
