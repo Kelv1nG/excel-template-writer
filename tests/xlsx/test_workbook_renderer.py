@@ -22,6 +22,7 @@ from openpyxl.worksheet.table import Table
 
 from excel_template_writer.diagnostics import (
     DiagnosticCode,
+    DiagnosticSeverity,
     TemplateCompilationError,
     TemplateRenderError,
 )
@@ -475,6 +476,94 @@ def test_render_workbook_normalizes_adapter_values_once_for_all_sheets(
             assert sheet["A2"].value == "Beta"
     finally:
         rendered.close()
+
+
+@pytest.mark.parametrize(
+    ("missing_output", "expected_sole", "expected_mixed"),
+    [
+        ("blank", None, "Contact: "),
+        (
+            "preserve",
+            "{{  customer.phone  }}",
+            "Contact: {{ customer.email }}",
+        ),
+    ],
+)
+def test_render_workbook_publishes_tolerated_missing_outputs_with_warnings(
+    tmp_path: Path,
+    missing_output: str,
+    expected_sole: str | None,
+    expected_mixed: str,
+) -> None:
+    template_path = tmp_path / f"{missing_output}-template.xlsx"
+    output_path = tmp_path / f"{missing_output}-output.xlsx"
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Report"
+    sheet["A1"] = "{{  customer.phone  }}"
+    sheet["A2"] = "Contact: {{ customer.email }}"
+    sheet["A3"] = "{{ customer.name }}"
+    sheet["A1"].fill = PatternFill("solid", fgColor="FFE2F0D9")
+    _save(workbook, template_path)
+    workbook.close()
+
+    result = render_workbook(
+        template_path,
+        output_path,
+        {"customer": {"name": "Acme"}},
+        missing_output=missing_output,
+    )
+
+    assert result.output_path == output_path
+    assert [diagnostic.code for diagnostic in result.diagnostics] == [
+        DiagnosticCode.MISSING_VALUE_RENDERED,
+        DiagnosticCode.MISSING_VALUE_RENDERED,
+    ]
+    assert all(
+        diagnostic.severity is DiagnosticSeverity.WARNING for diagnostic in result.diagnostics
+    )
+    assert [str(diagnostic.location) for diagnostic in result.diagnostics] == [
+        "Report!A1:0",
+        "Report!A2:9",
+    ]
+    rendered = load_workbook(output_path, data_only=False)
+    try:
+        target = rendered["Report"]
+        assert target["A1"].value == expected_sole
+        assert target["A1"].fill.fgColor.rgb == "FFE2F0D9"
+        assert target["A2"].value == expected_mixed
+        assert target["A3"].value == "Acme"
+    finally:
+        rendered.close()
+
+
+def test_render_workbook_keeps_missing_outputs_fatal_by_default(tmp_path: Path) -> None:
+    template_path = tmp_path / "strict-template.xlsx"
+    output_path = tmp_path / "strict-output.xlsx"
+    workbook = Workbook()
+    workbook.active.title = "Report"
+    workbook.active["A1"] = "{{ missing }}"
+    _save(workbook, template_path)
+    workbook.close()
+
+    with pytest.raises(TemplateRenderError) as caught:
+        render_workbook(template_path, output_path, {})
+
+    assert [diagnostic.code for diagnostic in caught.value.diagnostics] == [
+        DiagnosticCode.MISSING_VALUE
+    ]
+    assert caught.value.diagnostics[0].severity is DiagnosticSeverity.ERROR
+    assert not output_path.exists()
+
+
+def test_render_workbook_rejects_an_unknown_missing_output_policy(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="missing_output"):
+        render_workbook(
+            tmp_path / "missing-template.xlsx",
+            tmp_path / "output.xlsx",
+            {},
+            missing_output="silent",
+        )
 
 
 def test_render_workbook_copies_values_direct_styles_styled_blanks_and_dimensions(

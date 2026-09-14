@@ -11,12 +11,13 @@ from excel_template_writer.compiler import compile_sheet
 from excel_template_writer.diagnostics import (
     Diagnostic,
     DiagnosticCode,
+    DiagnosticSeverity,
     SourceLocation,
     TemplateCompilationError,
     TemplateRenderError,
 )
 from excel_template_writer.limits import DEFAULT_RESOURCE_LIMITS, ResourceLimits
-from excel_template_writer.render import RenderPlan, render_sheet
+from excel_template_writer.render import MissingOutputPolicy, RenderPlan, render_sheet
 from excel_template_writer.values import TypeAdapter, normalize_context
 from excel_template_writer.xlsx.model import SheetFeaturePlan
 from excel_template_writer.xlsx.package_limits import inspect_xlsx_package
@@ -36,6 +37,7 @@ def render_workbook(
     output_path: str | Path,
     context: object,
     *,
+    missing_output: MissingOutputPolicy | str = MissingOutputPolicy.ERROR,
     adapters: Iterable[TypeAdapter[Any]] = (),
     limits: ResourceLimits = DEFAULT_RESOURCE_LIMITS,
 ) -> WorkbookRenderResult:
@@ -45,6 +47,7 @@ def render_workbook(
         template_path: Existing input ``.xlsx`` template path.
         output_path: Separate destination ``.xlsx`` path.
         context: Raw render-context mapping or normalized context.
+        missing_output: Policy for missing values in output tags.
         adapters: Explicit converters for caller-owned runtime types.
         limits: Resource ceilings shared across the complete operation.
 
@@ -54,8 +57,13 @@ def render_workbook(
     Raises:
         TemplateCompilationError: If paths, syntax, geometry, or workbook features are invalid.
         TemplateRenderError: If normalization, evaluation, or resource planning fails.
+        ValueError: If ``missing_output`` is not a supported policy.
     """
 
+    try:
+        missing_output_policy = MissingOutputPolicy(missing_output)
+    except (TypeError, ValueError) as error:
+        raise ValueError("missing_output must be 'error', 'blank', or 'preserve'") from error
     source_path = Path(template_path).resolve()
     destination_path = Path(output_path).resolve()
     invalid_path = next(
@@ -123,6 +131,8 @@ def render_workbook(
     plans: list[RenderPlan] = []
     feature_plans: list[SheetFeaturePlan] = []
     diagnostics: list[Diagnostic] = []
+    has_compilation_errors = False
+    has_render_errors = False
     planned_cells = 0
     resource_codes = {
         DiagnosticCode.RENDER_RESOURCE_LIMIT_EXCEEDED,
@@ -133,13 +143,24 @@ def render_workbook(
         compilation = compile_sheet(sheet.template)
         if compilation.compiled is None:
             diagnostics.extend(compilation.diagnostics)
+            has_compilation_errors = True
             continue
-        rendering = render_sheet(compilation.compiled, normalized_context, limits=limits)
+        rendering = render_sheet(
+            compilation.compiled,
+            normalized_context,
+            missing_output=missing_output_policy,
+            limits=limits,
+        )
         if rendering.plan is None:
             if any(diagnostic.code in resource_codes for diagnostic in rendering.diagnostics):
                 raise TemplateRenderError(rendering.diagnostics)
             diagnostics.extend(rendering.diagnostics)
+            has_render_errors = has_render_errors or any(
+                diagnostic.severity is DiagnosticSeverity.ERROR
+                for diagnostic in rendering.diagnostics
+            )
             continue
+        diagnostics.extend(rendering.diagnostics)
         planned_cells += len(rendering.plan.cells)
         if planned_cells > limits.max_planned_cells_per_workbook:
             raise TemplateRenderError(
@@ -160,9 +181,14 @@ def render_workbook(
         )
         feature_plans.append(feature_plan)
         diagnostics.extend(feature_diagnostics)
+        has_compilation_errors = has_compilation_errors or any(
+            diagnostic.severity is DiagnosticSeverity.ERROR for diagnostic in feature_diagnostics
+        )
         plans.append(rendering.plan)
-    if diagnostics:
+    if has_compilation_errors:
         raise TemplateCompilationError(diagnostics)
+    if has_render_errors:
+        raise TemplateRenderError(diagnostics)
     if len(plans) != len(snapshot.sheets):
         raise RuntimeError("internal error: not every worksheet produced a render plan")
     if len(feature_plans) != len(snapshot.sheets):
@@ -175,7 +201,7 @@ def render_workbook(
         destination_path,
         limits=limits,
     )
-    return WorkbookRenderResult(written_path, ())
+    return WorkbookRenderResult(written_path, tuple(diagnostics))
 
 
 __all__ = ["WorkbookRenderResult", "render_workbook"]
