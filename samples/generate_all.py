@@ -9,6 +9,7 @@ from samples import (
     cell_shift_lanes,
     conditions_and_nesting,
     fixed_range_charts,
+    missing_output_policies,
     regions,
     repeated_blocks,
     scalar_values,
@@ -40,6 +41,10 @@ def main() -> None:
 
     pairs = [
         _run_sample(scalar_values.build_template, scalar_values.render_sample),
+        _run_sample(
+            missing_output_policies.build_template,
+            missing_output_policies.render_sample,
+        ),
         _run_sample(repeated_blocks.build_template, repeated_blocks.render_sample),
         _run_sample(
             conditions_and_nesting.build_template,

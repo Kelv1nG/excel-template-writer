@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SAMPLES = ROOT / "samples"
 SAMPLE_STEMS = (
     "scalar_values",
+    "missing_output_policies",
     "repeated_blocks",
     "conditions_and_nesting",
     "cell_shift_lanes",
@@ -31,20 +32,27 @@ def test_committed_sample_workbook_pairs_are_valid_and_rendered(stem: str) -> No
     output = load_workbook(output_path, read_only=True, data_only=False)
     try:
         assert template.sheetnames == output.sheetnames
-        assert any(
-            "{%" in cell.value or "{{" in cell.value
+        template_text = [
+            cell.value
             for sheet in template.worksheets
             for row in sheet.iter_rows()
             for cell in row
             if isinstance(cell.value, str)
-        )
-        assert all(
-            "{%" not in cell.value and "{{" not in cell.value
+        ]
+        output_text = [
+            cell.value
             for sheet in output.worksheets
             for row in sheet.iter_rows()
             for cell in row
             if isinstance(cell.value, str)
-        )
+        ]
+        assert any("{%" in value or "{{" in value for value in template_text)
+        assert all("{%" not in value for value in output_text)
+        if stem == "missing_output_policies":
+            assert "{{  customer.email  }}" in output_text
+            assert "Contact: {{  customer.email  }}" in output_text
+        else:
+            assert all("{{" not in value for value in output_text)
     finally:
         template.close()
         output.close()

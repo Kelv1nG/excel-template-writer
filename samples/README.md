@@ -26,6 +26,7 @@ When the optional dependency is absent, the generator prints one Polars skip mes
 | Python module | Generated workbooks | Current features demonstrated |
 | --- | --- | --- |
 | `samples.scalar_values` | `scalar_values_template.xlsx`, `scalar_values_output.xlsx` | Native scalar cells, mixed text, mapping access, native dates versus textual `date`, numeric `sum`/`min`/`max`, record and non-null `count`, basic arithmetic with precedence and unary signs, plus `upper`, `join`, and `default` filters |
+| `samples.missing_output_policies` | `missing_output_policies_template.xlsx`, `missing_output_policies_output.xlsx` | Strict `error`, tolerant `blank`, and exact-tag `preserve` handling for missing output values; `W1301` warnings, mixed text, `default` precedence, present nulls, and formatted blanks |
 | `samples.repeated_blocks` | `repeated_blocks_template.xlsx`, `repeated_blocks_output.xlsx` | One-cell lists, styled rectangular table rows, row shifting, formatted blanks, directive-only cell fill/border preservation, merged footers, and empty-repeat placeholders |
 | `samples.conditions_and_nesting` | `conditions_and_nesting_template.xlsx`, `conditions_and_nesting_output.xlsx` | `if`/`else`, no-`else` conditions, boolean expressions, nested repeats, lexical scope, and bottom-up measurement |
 | `samples.cell_shift_lanes` | `cell_shift_lanes_template.xlsx`, `cell_shift_lanes_output.xlsx` | Side-by-side `shift="cells"` repeats with independently moving lanes and stationary neighboring cells |
@@ -39,8 +40,14 @@ Run one sample independently with, for example:
 
 ```powershell
 uv run python -m samples.regions
+uv run python -m samples.missing_output_policies
 uv run --extra polars python -m samples.polars_dataframe
 ```
+
+The committed `missing_output_policies_output.xlsx` workbook uses `preserve` so unresolved tags and
+their exact authored spacing remain visible. Its generator also renders temporary `error` and
+`blank` variants to verify that strict mode publishes no workbook, while blank mode publishes a
+formatted blank plus nonfatal `W1301` diagnostics.
 
 ## Required sample coverage for new features
 
