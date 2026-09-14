@@ -22,6 +22,7 @@ class DiagnosticCode(StrEnum):
     INVALID_MARKER_POSITION = "E1204"
     PARTIAL_BLOCK_OVERLAP = "E1205"
     MISSING_VALUE = "E1301"
+    MISSING_VALUE_RENDERED = "W1301"
     COLLECTION_IN_SCALAR_CELL = "E1302"
     EXPECTED_COLLECTION = "E1303"
     FILTER_TYPE_MISMATCH = "E1304"
@@ -68,6 +69,11 @@ class DiagnosticCode(StrEnum):
     UNSUPPORTED_WORKBOOK_FORMAT = "E3202"
 
 
+class DiagnosticSeverity(StrEnum):
+    ERROR = "error"
+    WARNING = "warning"
+
+
 @dataclass(frozen=True)
 class SourceLocation:
     sheet: str
@@ -97,6 +103,7 @@ class Diagnostic:
     code: DiagnosticCode
     message: str
     location: SourceLocation | ContextLocation
+    severity: DiagnosticSeverity = DiagnosticSeverity.ERROR
 
     def __str__(self) -> str:
         """Format the code, location, and message for human-readable output."""

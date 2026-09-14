@@ -3,7 +3,7 @@
 from excel_template_writer.compiler import CompilationResult, compile_sheet
 from excel_template_writer.limits import ResourceLimits
 from excel_template_writer.model import Coordinate, Rectangle, WorksheetTemplate
-from excel_template_writer.render import RenderPlan, RenderResult, render_sheet
+from excel_template_writer.render import MissingOutputPolicy, RenderPlan, RenderResult, render_sheet
 from excel_template_writer.values import (
     CanonicalContext,
     CanonicalValue,
@@ -24,6 +24,7 @@ __all__ = [
     "ContextStatistics",
     "Coordinate",
     "InputValue",
+    "MissingOutputPolicy",
     "NormalizationResult",
     "NormalizedContext",
     "Rectangle",

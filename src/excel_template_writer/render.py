@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
+from enum import StrEnum
 from typing import Any
 
 from excel_template_writer.ast import (
@@ -19,6 +20,7 @@ from excel_template_writer.ast import (
 from excel_template_writer.diagnostics import (
     Diagnostic,
     DiagnosticCode,
+    DiagnosticSeverity,
     SourceLocation,
     TemplateRenderError,
 )
@@ -45,6 +47,14 @@ from excel_template_writer.values import (
     is_ordered_collection,
     normalize_context,
 )
+
+
+class MissingOutputPolicy(StrEnum):
+    """Choose how missing values in output tags are rendered."""
+
+    ERROR = "error"
+    BLANK = "blank"
+    PRESERVE = "preserve"
 
 
 @dataclass(frozen=True)
@@ -124,16 +134,23 @@ class _ResourceLimitExceeded(Exception):
 
 
 class _Renderer:
-    def __init__(self, compiled: CompiledSheet, limits: ResourceLimits) -> None:
+    def __init__(
+        self,
+        compiled: CompiledSheet,
+        limits: ResourceLimits,
+        missing_output: MissingOutputPolicy,
+    ) -> None:
         """Initialize one pure worksheet render operation.
 
         Args:
             compiled: Immutable worksheet AST to render.
             limits: Resource ceilings for planning this worksheet.
+            missing_output: Policy for missing values in output tags.
         """
 
         self.compiled = compiled
         self.limits = limits
+        self.missing_output = missing_output
         self.diagnostics: list[Diagnostic] = []
         self.repeat_iterations = 0
 
@@ -142,6 +159,8 @@ class _Renderer:
         code: DiagnosticCode,
         message: str,
         location: SourceLocation,
+        *,
+        severity: DiagnosticSeverity = DiagnosticSeverity.ERROR,
     ) -> None:
         """Append a recoverable render diagnostic.
 
@@ -149,9 +168,10 @@ class _Renderer:
             code: Stable diagnostic code.
             message: Human-readable failure description.
             location: Worksheet source location responsible for the failure.
+            severity: Whether the diagnostic prevents a render plan.
         """
 
-        self.diagnostics.append(Diagnostic(code, message, location))
+        self.diagnostics.append(Diagnostic(code, message, location, severity))
 
     def resource_limit(
         self,
@@ -260,6 +280,27 @@ class _Renderer:
             except MissingValueError as error:
                 if error.root in missing_roots:
                     value = None
+                elif self.missing_output is MissingOutputPolicy.BLANK:
+                    self.diagnostic(
+                        DiagnosticCode.MISSING_VALUE_RENDERED,
+                        str(error),
+                        part.span.location,
+                        severity=DiagnosticSeverity.WARNING,
+                    )
+                    value = None
+                elif self.missing_output is MissingOutputPolicy.PRESERVE:
+                    self.diagnostic(
+                        DiagnosticCode.MISSING_VALUE_RENDERED,
+                        str(error),
+                        part.span.location,
+                        severity=DiagnosticSeverity.WARNING,
+                    )
+                    source_value = self.compiled.template.cells[cell.coordinate]
+                    if not isinstance(source_value, str):
+                        raise TypeError(
+                            "output expression source cell must contain text"
+                        ) from error
+                    value = source_value[part.span.start : part.span.end]
                 else:
                     self.diagnostic(
                         DiagnosticCode.MISSING_VALUE,
@@ -822,6 +863,7 @@ def render_sheet(
     compiled: CompiledSheet,
     context: object,
     *,
+    missing_output: MissingOutputPolicy | str = MissingOutputPolicy.ERROR,
     adapters: Iterable[TypeAdapter[Any]] = (),
     limits: ResourceLimits = DEFAULT_RESOURCE_LIMITS,
 ) -> RenderResult:
@@ -830,17 +872,25 @@ def render_sheet(
     Args:
         compiled: Immutable compiled worksheet AST.
         context: Raw or already-normalized render context.
+        missing_output: Policy for missing values in output tags.
         adapters: Explicit runtime-type adapters used during normalization.
         limits: Resource ceilings for normalization and planning.
 
     Returns:
         A complete render plan or structured diagnostics; never a partial plan.
+
+    Raises:
+        ValueError: If ``missing_output`` is not a supported policy.
     """
 
+    try:
+        missing_output_policy = MissingOutputPolicy(missing_output)
+    except (TypeError, ValueError) as error:
+        raise ValueError("missing_output must be 'error', 'blank', or 'preserve'") from error
     normalization = normalize_context(context, adapters=adapters, limits=limits)
     if normalization.context is None:
         return RenderResult(None, normalization.diagnostics)
-    renderer = _Renderer(compiled, limits)
+    renderer = _Renderer(compiled, limits, missing_output_policy)
     try:
         block = renderer.render_area(
             compiled.rectangle,
@@ -851,8 +901,9 @@ def render_sheet(
         )
     except _ResourceLimitExceeded as error:
         return RenderResult(None, (error.diagnostic,))
-    if renderer.diagnostics:
-        return RenderResult(None, tuple(renderer.diagnostics))
+    diagnostics = tuple(renderer.diagnostics)
+    if any(diagnostic.severity is DiagnosticSeverity.ERROR for diagnostic in diagnostics):
+        return RenderResult(None, diagnostics)
     cells = tuple(cell for _, cell in sorted(block.cells.items()))
     rows = tuple(row for _, row in sorted(block.rows.items()))
     merges = tuple(
@@ -875,5 +926,5 @@ def render_sheet(
             block.height,
             block.width,
         ),
-        (),
+        diagnostics,
     )
