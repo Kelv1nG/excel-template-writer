@@ -56,6 +56,66 @@ Invoice {{ invoice.number }}
 
 A collection cannot be written directly to a scalar cell. Use a `for` block to repeat cells, or use `join` when the desired result really is one text value.
 
+### Missing output values
+
+A missing name, mapping property, or index is different from a present `null`. By default, an
+unhandled missing value in an output tag reports `E1301` and the render returns no plan or workbook.
+The caller may set `missing_output` to one of three `MissingOutputPolicy` values:
+
+| Policy | Result for a missing `{{ ... }}` output tag |
+| --- | --- |
+| `error` | Default. Report fatal `E1301`. |
+| `blank` | Substitute a blank and report nonfatal warning `W1301`. |
+| `preserve` | Keep the exact original tag substring, including braces and spacing, and report nonfatal warning `W1301`. |
+
+For a sole output tag, `blank` writes `None`, so the destination is an ordinary blank Excel cell
+with the source presentation. In mixed text, it contributes an empty string:
+
+```text
+Reference: {{ missing_reference }}
+```
+
+With `blank`, that cell becomes `Reference: `. With `preserve`, it remains
+`Reference: {{ missing_reference }}`. Other literal text and successful output tags in the same cell
+are unaffected.
+
+The policy handles a compound output expression as one complete tag. If `missing_price` is absent in
+this expression, no partial arithmetic result is emitted:
+
+```text
+{{ quantity * missing_price }}
+```
+
+`blank` blanks that whole tag. `preserve` retains the whole exact substring. For example, the
+noncanonical spacing in `{{  quantity * missing_price  }}` is also retained exactly.
+
+Use `default(...)` when the template author knows the intended fallback:
+
+```text
+{{ customer.phone | default("—") }}
+```
+
+`default` consumes the missing value before the output policy, so it produces the fallback without
+`W1301`. A present `null` does not select the fallback and otherwise keeps its existing behavior.
+
+This policy applies only to unhandled missing values at an output-tag boundary. A missing collection
+in `{% for ... %}` and a missing condition in `{% if ... %}` always report fatal `E1301`; treating
+them as empty or false would silently alter layout. Invalid filters, wrong runtime types, division by
+zero, layout collisions, and all other non-missing errors also remain fatal.
+
+Configure the policy per render; it is not template syntax:
+
+```python
+from excel_template_writer import MissingOutputPolicy, render_sheet
+
+result = render_sheet(
+    compiled,
+    context,
+    missing_output=MissingOutputPolicy.PRESERVE,
+)
+plan = result.require()  # W1301 warnings do not prevent a successful plan
+```
+
 ### Excel formatting
 
 Format placeholder cells in Excel exactly as their output should appear. Every rendered destination
@@ -206,8 +266,9 @@ advanced Excel number-format constructs. Month and weekday names are English in 
 release.
 
 The input must be a native `date` or `datetime` value. A datetime contributes only its calendar
-date. Strings, numbers, and `null` are rejected instead of being parsed or guessed. Missing values
-remain missing-value errors.
+date. Strings, numbers, and `null` are rejected instead of being parsed or guessed. A missing input
+raises the missing-value failure; when it reaches an output-tag boundary unhandled, the configured
+missing-output policy applies to that complete tag.
 
 `date` always returns text, including when it is the only expression in a cell. To preserve a
 native Excel date, keep the expression unfiltered and format the placeholder cell in Excel:
@@ -247,9 +308,11 @@ requires records and counts present non-null values at that literal key:
 ```
 
 Column names are literal keys, not dotted paths or dynamic expressions. Every collection item must
-be a record containing the selected key. A missing key reports `E1301`; a non-record item reports
-`E1304`. `sum`, `min`, and `max` also report `E1304` for booleans, strings, and other non-numeric
-selected values. Numeric strings are not converted.
+be a record containing the selected key. A missing key raises the missing-value failure and names
+the failing index and key; when that failure reaches an output-tag boundary unhandled, the configured
+missing-output policy applies to the complete aggregate tag. A non-record item reports `E1304`.
+`sum`, `min`, and `max` also report `E1304` for booleans, strings, and other non-numeric selected
+values. Numeric strings are not converted.
 
 Numeric aggregates skip present `null` values. Empty and all-null `sum` inputs return integer `0`;
 empty and all-null `min` or `max` inputs return `null`, producing a blank sole-expression cell.
@@ -360,7 +423,9 @@ B4: Formatted placeholder{% endfor %}
 
 an empty `items` collection produces a blank `A4` and the literal text `Formatted placeholder` in `B4`.
 
-Missing values unrelated to the absent item remain errors. There is no `{% empty %}` branch yet.
+This placeholder rule is special to expressions rooted at the deliberately absent item and produces
+no `W1301`. A missing value in another body output tag follows `missing_output`; a missing controlling
+collection always remains fatal `E1301`. There is no `{% empty %}` branch yet.
 
 ### `shift="rows"`
 
@@ -486,6 +551,10 @@ A one-cell condition is also legal:
 
 An `if` directive does not add variables to scope. Its expression can read the surrounding context, including variables from containing loops.
 
+A missing value in the condition always reports fatal `E1301`, regardless of `missing_output`. The
+renderer never interprets missing as false because branch selection changes measured workbook
+geometry.
+
 Conditions do not accept `direction` or `shift` options. At the worksheet root they use row
 shifting. Inside a loop or region they inherit the nearest container's shift policy, so a
 condition in a `shift="cells"` lane does not move unrelated neighboring columns.
@@ -607,6 +676,7 @@ than `rows` or `cells` are rejected during compilation.
 | `E1204` | Marker is not at the required cell-token boundary |
 | `E1205` | Partially overlapping blocks |
 | `E1301` | Missing value during rendering |
+| `W1301` | Missing value in an output tag was blanked or preserved by `missing_output` |
 | `E1302` | Collection used as a scalar cell value |
 | `E1303` | `for` expression did not produce a supported collection |
 | `E1304` | Runtime value has the wrong type for a compiled filter |

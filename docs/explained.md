@@ -44,7 +44,7 @@ flowchart LR
 
     Compile -. "errors" .-> Diagnostics["Structured diagnostics"]
     Normalizer -. "errors" .-> Diagnostics
-    Renderer -. "errors" .-> Diagnostics
+    Renderer -. "errors / warnings" .-> Diagnostics
 ```
 
 The important dependency direction is left to right. `openpyxl` belongs at the reader/writer edges. The lexer, parsers, AST, compiler, evaluator, and layout planner do not import it.
@@ -136,7 +136,11 @@ flags. These additions do not introduce `openpyxl` into the language core.
 - `OutputToken` for `{{ expression }}`;
 - `DirectiveToken` for `{% directive %}`.
 
-Every token carries a `SourceSpan`: worksheet name, cell address, and character offsets. This is why a syntax error can identify a cell such as `Report!B4` rather than reporting only a generic parser failure.
+Every token carries a `SourceSpan`: worksheet name, cell address, and character offsets. This is why
+a syntax error can identify a cell such as `Report!B4` rather than reporting only a generic parser
+failure. The span of an output token also delimits its complete original `{{ ... }}` substring,
+allowing missing-output preservation to reproduce authored braces and spacing exactly instead of
+regenerating source text from the expression AST.
 
 Non-string cells bypass the text lexer and become literal typed cell parts.
 
@@ -284,7 +288,20 @@ Each `ExpressionPart` is evaluated against the current lexical scope.
   scalar.
 - Numeric `+`, `-`, `*`, `/`, and unary signs produce typed scalars and propagate present nulls.
 - A collection used directly as a scalar is an error.
-- A missing value is an error unless handled by `default` or by the special empty-repeat placeholder behavior.
+- A missing value is an error by default; `default`, the special empty-repeat placeholder behavior,
+  or a tolerant output policy may handle it under their narrower contracts.
+
+`MissingOutputPolicy` is applied only when an unhandled `MissingValueError` reaches one
+`ExpressionPart`, corresponding to one complete `{{ ... }}` tag. `error` emits fatal `E1301` and is
+the default. `blank` supplies `None` for a sole-expression cell or an empty segment during mixed-text
+assembly. `preserve` slices the exact original tag substring from the source cell using the token
+span. The latter two policies emit nonfatal `W1301` and allow the plan to succeed.
+
+This output-part boundary is important. A compound expression is blanked or preserved as a whole,
+and one failed tag in a mixed cell does not replace its literal neighbors or successful tags.
+`default` catches missing during expression evaluation before the boundary, so it wins over the
+policy and emits no warning. Present nulls never become missing. Other evaluator exceptions retain
+their own fatal diagnostics instead of passing through this recovery path.
 
 Filter input types are checked during evaluation because the same compiled workbook can be rendered
 with different contexts. For `date`, native dates and datetimes are accepted, while strings,
@@ -324,7 +341,9 @@ declared column band.
 
 ### Repeat evaluation
 
-For a `ForNode`, the renderer evaluates the collection expression. For each item it:
+For a `ForNode`, the renderer evaluates the collection expression. A missing collection remains
+fatal `E1301` under every missing-output policy; control expressions are not output parts and
+silently treating one as empty would change layout. For each present collection item the renderer:
 
 1. creates a child scope containing the loop variable;
 2. renders the complete source rectangle in that scope;
@@ -337,7 +356,10 @@ For an empty collection, the body is rendered once without binding the loop vari
 
 ### Conditional evaluation
 
-For an `IfNode`, the condition selects the true or false rectangle. Only that rectangle is rendered. If a false condition has no `else`, the node produces a zero-height block. The containing shift policy closes the removed space.
+For an `IfNode`, the condition selects the true or false rectangle. A missing condition remains
+fatal `E1301` under every missing-output policy because inferring false would choose layout without
+data. Only the selected rectangle is rendered. If a false condition has no `else`, the node produces
+a zero-height block. The containing shift policy closes the removed space.
 
 Conditions have no author-facing `shift` option. At top level they shift rows. Inside a
 `shift="cells"` loop or region they inherit that lane isolation.
@@ -391,23 +413,34 @@ At no point does the engine perform global string replacement or discover a bloc
 [`diagnostics.py`](../src/excel_template_writer/diagnostics.py) defines stable codes and source locations. Both compilation and rendering return result objects:
 
 ```python
+from excel_template_writer import MissingOutputPolicy
+
 compilation = compile_sheet(template)
 if compilation.diagnostics:
     # Present all compile diagnostics to the caller.
     ...
 
 compiled = compilation.require()  # Optional exception-based style.
-rendering = render_sheet(compiled, context)
+rendering = render_sheet(
+    compiled,
+    context,
+    missing_output=MissingOutputPolicy.BLANK,
+)
 plan = rendering.require()
+warnings = rendering.diagnostics  # Nonfatal W1301 entries remain observable.
 ```
 
-Compilation produces no AST on error. Rendering produces no plan on error. A production workbook writer must be invoked only after a complete plan exists, so invalid templates cannot leave a partially rendered workbook presented as success.
+Compilation produces no AST on error. Rendering produces no plan on error. Warning-only rendering,
+including recovered missing output tags under `blank` or `preserve`, returns both the complete plan
+and its diagnostics. A production workbook writer must be invoked only after a complete plan exists,
+so invalid templates cannot leave a partially rendered workbook presented as success.
 
 Current diagnostics cover lexical errors, invalid directives, expressions, filters and date
 formats, unmatched or ambiguous markers, invalid geometry, partial overlap, invalid context values,
 missing data, filter and scalar/collection type mistakes, row-shift conflicts, and destination
-collisions. Worksheet diagnostics carry sheet/cell locations; canonical-value diagnostics carry
-context paths.
+collisions. `E1301` is fatal missing data; `W1301` records an output tag recovered by the explicit
+missing-output policy. Worksheet diagnostics carry sheet/cell locations; canonical-value
+diagnostics carry context paths.
 
 ## The XLSX boundary
 
@@ -450,6 +483,8 @@ cell formatting, styled blanks, row/column properties, merged ranges, fixed-refe
 template-authored worksheet charts, template-authored embedded PNG/JPEG pictures,
 template-authored static editable text shapes, immutable context normalization, caller-supplied
 type adapters, deterministic resource limits, and XLSX package preflight.
+The render boundary also supports `error`, `blank`, and `preserve` missing-output policies without
+weakening structural-expression or non-missing error handling.
 
 It does not yet provide:
 

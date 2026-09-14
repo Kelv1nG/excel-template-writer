@@ -47,6 +47,28 @@ plan = render_sheet(
 
 Compilation and rendering return structured diagnostics; `.require()` raises an exception only when a caller prefers exception-based control flow.
 
+Missing values in output tags are errors by default. Callers rendering intentionally incomplete
+data can select a narrow output policy without suppressing any other error:
+
+```python
+from excel_template_writer import MissingOutputPolicy
+
+rendering = render_sheet(
+    compiled,
+    {"rows": [{"name": "Service"}]},
+    missing_output=MissingOutputPolicy.BLANK,
+)
+plan = rendering.require()
+warnings = rendering.diagnostics  # W1301 for each recovered output tag
+```
+
+`BLANK` writes a blank for the missing tag. `PRESERVE` writes the exact original `{{ ... }}` tag,
+including its braces and spacing, which is useful for visibly unfinished workbooks. In a mixed cell,
+only the missing segment is blanked or preserved. A compound expression is handled as one complete
+tag, and `default(...)` still takes precedence. Present nulls behave as before; missing `for`
+collections and `if` conditions remain errors, as do all non-missing failures. The string values
+`"blank"` and `"preserve"` are accepted as conveniences; `"error"` is the default.
+
 Table-shaped collections support the scalar reducers `sum`, `min`, `max`, and `count`, each with an
 optional literal record-column name. Numeric expressions also support unary signs and `+`, `-`,
 `*`, and `/`. Parenthesize filtered operands when combining aggregate results:
@@ -128,6 +150,10 @@ render_workbook(
 
 All worksheets are compiled, planned, and validated before the output workbook is written. The
 input file is never overwritten, and the serialized output is reopened before it is published.
+Recovered missing output tags produce nonfatal `W1301` warning diagnostics and do not prevent a
+plan or workbook from being returned successfully. The workbook entry point accepts the same
+`missing_output=MissingOutputPolicy.BLANK` (or `MissingOutputPolicy.PRESERVE`) argument shown for
+`render_sheet`; omitting it keeps the strict `MissingOutputPolicy.ERROR` default.
 
 ## Development
 
