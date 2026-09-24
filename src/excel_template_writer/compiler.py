@@ -402,7 +402,7 @@ def _spec_shift(spec: _RegionSpec, specs: list[_RegionSpec]) -> str:
         specs: All specifications used to locate inherited parents.
 
     Returns:
-        ``"rows"`` or ``"cells"`` after applying conditional inheritance.
+        ``"rows"``, ``"cells"``, or ``"none"`` after applying conditional inheritance.
     """
 
     directive = spec.pair.opener.directive
@@ -436,7 +436,7 @@ def _validate_sibling_shift_lanes(
                 diagnostics.append(
                     Diagnostic(
                         DiagnosticCode.OVERLAPPING_ROW_SHIFTS,
-                        'sibling blocks with overlapping rows must both use shift="cells"',
+                        "sibling blocks with overlapping rows must not use whole-row shifting",
                         second.pair.opener.span.location,
                     )
                 )
@@ -517,6 +517,14 @@ def _make_node(
     child_specs = _children_of(spec, specs)
     _validate_sibling_shift_lanes(child_specs, specs, diagnostics)
     directive = spec.pair.opener.directive
+    if isinstance(directive, ForDirective) and directive.shift == "none" and child_specs:
+        diagnostics.append(
+            Diagnostic(
+                DiagnosticCode.INVALID_BLOCK_GEOMETRY,
+                'shift="none" repeat cannot contain structural blocks',
+                spec.pair.opener.span.location,
+            )
+        )
     child_containing_shift = (
         directive.shift
         if isinstance(directive, (ForDirective, RegionDirective))

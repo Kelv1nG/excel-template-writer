@@ -113,6 +113,294 @@ def test_cell_shift_grows_only_the_repeated_lane() -> None:
     }
 
 
+def test_no_shift_fills_fixed_blank_slots_without_moving_neighbors() -> None:
+    template = WorksheetTemplate.from_cells(
+        "Report",
+        {
+            "A1": '{% for item in items shift="none" %}{{ item }}{% endfor %}',
+            "A2": None,
+            "A3": None,
+            "A4": None,
+            "A5": "Footer",
+            "B1": "Beside 1",
+            "B2": "Beside 2",
+            "B3": "Beside 3",
+            "B4": "Beside 4",
+            "B5": "Beside footer",
+        },
+    )
+    compiled = compile_sheet(template).require()
+
+    plan = render_sheet(compiled, {"items": ["A", "B", "C"]}).require()
+
+    assert _values_by_coordinate(plan) == {
+        "A1": "A",
+        "B1": "Beside 1",
+        "A2": "B",
+        "B2": "Beside 2",
+        "A3": "C",
+        "B3": "Beside 3",
+        "A4": None,
+        "B4": "Beside 4",
+        "A5": "Footer",
+        "B5": "Beside footer",
+    }
+    presentation_by_destination = {
+        cell.coordinate.a1: (
+            None if cell.presentation_coordinate is None else cell.presentation_coordinate.a1
+        )
+        for cell in plan.cells
+    }
+    rendered_presentations = {
+        coordinate: presentation_by_destination[coordinate] for coordinate in ("A1", "A2", "A3")
+    }
+    assert rendered_presentations == {
+        "A1": "A1",
+        "A2": "A2",
+        "A3": "A3",
+    }
+
+
+def test_no_shift_uses_default_presentation_and_identity_rows_beyond_material_cells() -> None:
+    template = WorksheetTemplate.from_rows(
+        "Report",
+        [['{% for item in items shift="none" %}{{ item }}{% endfor %}']],
+    )
+    compiled = compile_sheet(template).require()
+
+    plan = render_sheet(compiled, {"items": ["A", "B", "C"]}).require()
+
+    assert _values_by_coordinate(plan) == {"A1": "A", "A2": "B", "A3": "C"}
+    assert [cell.presentation_coordinate for cell in plan.cells] == [
+        Coordinate(1, 1),
+        None,
+        None,
+    ]
+    assert [(row.destination_row, row.source_row) for row in plan.rows] == [
+        (1, 1),
+        (2, 2),
+        (3, 3),
+    ]
+
+
+def test_no_shift_keeps_explicit_row_only_provenance_stationary() -> None:
+    template = WorksheetTemplate.from_rows(
+        "Report",
+        [['{% for item in items shift="none" %}{{ item }}{% endfor %}']],
+    )
+    compiled = compile_sheet(template).require()
+
+    plan = render_sheet(
+        compiled,
+        {"items": ["A", "B"]},
+        preserved_source_rows=(3,),
+    ).require()
+
+    assert [(row.destination_row, row.source_row) for row in plan.rows] == [
+        (1, 1),
+        (2, 2),
+        (3, 3),
+    ]
+
+
+def test_whole_row_shift_moves_explicit_row_only_provenance() -> None:
+    template = WorksheetTemplate.from_rows(
+        "Report",
+        [["{% for item in items %}{{ item }}{% endfor %}"]],
+    )
+    compiled = compile_sheet(template).require()
+
+    plan = render_sheet(
+        compiled,
+        {"items": ["A", "B"]},
+        preserved_source_rows=(3,),
+    ).require()
+
+    assert [(row.destination_row, row.source_row) for row in plan.rows] == [
+        (1, 1),
+        (2, 1),
+        (3, 2),
+        (4, 3),
+    ]
+
+
+def test_no_shift_rejects_occupied_cells_anywhere_in_fixed_footprint() -> None:
+    template = WorksheetTemplate.from_cells(
+        "Report",
+        {
+            "A1": '{% for item in items shift="none" %}{{ item.name }}',
+            "C1": "{{ item.amount }}{% endfor %}",
+            "A2": None,
+            "B2": "Occupied label",
+            "C2": None,
+        },
+    )
+    compiled = compile_sheet(template).require()
+
+    result = render_sheet(
+        compiled,
+        {"items": [{"name": "A", "amount": 1}, {"name": "B", "amount": 2}]},
+    )
+
+    assert result.plan is None
+    assert [diagnostic.code for diagnostic in result.diagnostics] == [
+        DiagnosticCode.LAYOUT_COLLISION
+    ]
+    assert str(result.diagnostics[0].location) == "Report!B2"
+
+
+@pytest.mark.parametrize(
+    "occupied",
+    [0, False, "", " ", "=1", "{{ guard }}"],
+    ids=["zero", "false", "empty-string", "whitespace", "formula", "template-tag"],
+)
+def test_no_shift_treats_every_non_none_raw_value_as_occupied(occupied: object) -> None:
+    template = WorksheetTemplate.from_cells(
+        "Report",
+        {
+            "A1": '{% for item in items shift="none" %}{{ item }}{% endfor %}',
+            "A2": occupied,
+        },
+    )
+    compiled = compile_sheet(template).require()
+
+    result = render_sheet(compiled, {"items": ["A", "B"], "guard": "present"})
+
+    assert result.plan is None
+    assert DiagnosticCode.LAYOUT_COLLISION in {diagnostic.code for diagnostic in result.diagnostics}
+    collision = next(
+        diagnostic
+        for diagnostic in result.diagnostics
+        if diagnostic.code is DiagnosticCode.LAYOUT_COLLISION
+    )
+    assert str(collision.location) == "Report!A2"
+
+
+def test_no_shift_reserves_sparse_holes_against_other_planned_output() -> None:
+    template = WorksheetTemplate.from_cells(
+        "Report",
+        {
+            "B1": '{% for upper in uppers shift="none" %}{{ upper }}{% endfor %}',
+            "A5": '{% for lower in lowers shift="none" %}{{ lower }}',
+            "C5": "{% endfor %}",
+        },
+    )
+    compiled = compile_sheet(template).require()
+
+    result = render_sheet(
+        compiled,
+        {
+            "uppers": ["U1", "U2", "U3", "U4", "U5"],
+            "lowers": ["L1"],
+        },
+    )
+
+    assert result.plan is None
+    assert DiagnosticCode.LAYOUT_COLLISION in {diagnostic.code for diagnostic in result.diagnostics}
+    collision = next(
+        diagnostic
+        for diagnostic in result.diagnostics
+        if diagnostic.code is DiagnosticCode.LAYOUT_COLLISION
+    )
+    assert str(collision.location) == "Report!B5"
+
+
+def test_no_shift_preserves_exact_prepared_merge_topology() -> None:
+    source_merge = Rectangle(1, 1, 1, 2)
+    destination_merge = Rectangle(3, 1, 3, 2)
+    template = WorksheetTemplate(
+        "Report",
+        {
+            Coordinate(1, 1): '{% for item in items shift="none" %}{{ item.name }}',
+            Coordinate(1, 2): None,
+            Coordinate(2, 1): "{{ item.detail }}",
+            Coordinate(2, 2): "{% endfor %}",
+            Coordinate(3, 1): None,
+            Coordinate(3, 2): None,
+            Coordinate(4, 1): None,
+            Coordinate(4, 2): None,
+        },
+        (source_merge, destination_merge),
+    )
+    compiled = compile_sheet(template).require()
+
+    plan = render_sheet(
+        compiled,
+        {
+            "items": [
+                {"name": "First", "detail": "One"},
+                {"name": "Second", "detail": "Two"},
+            ]
+        },
+    ).require()
+
+    assert _values_by_coordinate(plan)["A3"] == "Second"
+    assert [merge.rectangle for merge in plan.merges] == [source_merge, destination_merge]
+
+
+def test_no_shift_rejects_missing_prepared_destination_merge() -> None:
+    template = WorksheetTemplate(
+        "Report",
+        {
+            Coordinate(1, 1): '{% for item in items shift="none" %}{{ item.name }}',
+            Coordinate(1, 2): None,
+            Coordinate(2, 1): "{{ item.detail }}",
+            Coordinate(2, 2): "{% endfor %}",
+        },
+        (Rectangle(1, 1, 1, 2),),
+    )
+    compiled = compile_sheet(template).require()
+
+    result = render_sheet(
+        compiled,
+        {
+            "items": [
+                {"name": "First", "detail": "One"},
+                {"name": "Second", "detail": "Two"},
+            ]
+        },
+    )
+
+    assert result.plan is None
+    assert [diagnostic.code for diagnostic in result.diagnostics] == [
+        DiagnosticCode.MERGE_CROSSES_BLOCK_BOUNDARY
+    ]
+    assert str(result.diagnostics[0].location) == "Report!A3"
+
+
+def test_no_shift_rejects_mismatched_destination_merge_once() -> None:
+    template = WorksheetTemplate(
+        "Report",
+        {
+            Coordinate(1, 1): '{% for item in items shift="none" %}{{ item.name }}',
+            Coordinate(1, 2): None,
+            Coordinate(2, 1): "{{ item.detail }}",
+            Coordinate(2, 2): "{% endfor %}",
+            Coordinate(3, 1): None,
+            Coordinate(3, 2): None,
+            Coordinate(3, 3): None,
+        },
+        (Rectangle(1, 1, 1, 2), Rectangle(3, 1, 3, 3)),
+    )
+    compiled = compile_sheet(template).require()
+
+    result = render_sheet(
+        compiled,
+        {
+            "items": [
+                {"name": "First", "detail": "One"},
+                {"name": "Second", "detail": "Two"},
+            ]
+        },
+    )
+
+    assert result.plan is None
+    assert [diagnostic.code for diagnostic in result.diagnostics] == [
+        DiagnosticCode.MERGE_CROSSES_BLOCK_BOUNDARY
+    ]
+    assert str(result.diagnostics[0].location) == "Report!A3"
+
+
 def test_cell_shift_region_uses_tallest_side_by_side_lane_and_exact_column_band() -> None:
     template = WorksheetTemplate.from_cells(
         "Report",

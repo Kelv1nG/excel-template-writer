@@ -21,7 +21,8 @@ The language is declarative and Jinja-like, but its execution model is spatial. 
 - Merged cells are required.
 - Static headers and static rows are authored directly in the workbook.
 - The render context is presentation-ready: the renderer does not infer fields from headers, sort collections, or perform keyed merging, joins, or reconciliation.
-- Vertical repeats insert complete rows by default. Authors can select a narrower shift policy explicitly.
+- Vertical repeats insert complete rows by default. Authors can select isolated cell shifting or
+  fixed no-shift placement explicitly.
 - An empty repeat retains one blank formatted instance of its source block.
 - Missing output values are errors by default. A render-scoped policy may instead blank or preserve
   only output tags whose evaluation raises an unhandled missing-value error, with a warning for
@@ -129,7 +130,10 @@ C6: {{ line.unit_price | money }}
 F6: {{ line.total | money }}{% endfor %}
 ```
 
-The structural tags are removed from the output. The remaining content and formatting in `A6:F6` are cloned once per item.
+The structural tags are removed from the output. The remaining content and formatting in `A6:F6`
+are cloned once per item under the row- and cell-shift policies. Under `shift="none"`, rendered
+content is placed into fixed destination cells while each destination keeps its authored
+presentation.
 
 For a two-row block spanning `A6:F7`, the opening tag remains in `A6` and the closing tag is placed in `F7`.
 
@@ -186,7 +190,11 @@ This is the default for `direction="down"`. The engine inserts complete workshee
 
 For a collection of length `n`, the first item uses the source block and the engine inserts space for the remaining `n - 1` instances. A source block with multiple rows inserts the corresponding multiple of complete worksheet rows.
 
-Two sibling blocks whose source row spans overlap cannot independently use `shift="rows"`. Their insertions would both claim the same worksheet rows without an isolation boundary. Such siblings must use `shift="cells"`, or be placed in an explicit region construct that defines how their completed layouts are combined. Validation rejects the ambiguous row-shift arrangement.
+Two sibling blocks whose source row spans overlap cannot independently use `shift="rows"`. Their
+insertions would both claim the same worksheet rows without an isolation boundary. Such siblings
+must use non-row policies (`shift="cells"` or a compatible fixed `shift="none"` layout), or be
+placed in an explicit region construct that defines how their completed layouts are combined.
+Validation rejects the ambiguous row-shift arrangement.
 
 ### 8.2 `shift="columns"`
 
@@ -201,7 +209,50 @@ This is the default for `direction="right"`. The engine inserts complete workshe
 
 This mode supports independently growing blocks placed side by side, provided their shifted lanes do not collide with another protected region.
 
-### 8.4 Explicit regions and isolation
+### 8.4 `shift="none"`
+
+`shift="none"` is a `for`-only vertical placement policy. It never inserts, deletes, or translates
+cells, complete rows, row dimensions, merges, or neighboring content. Regions do not accept this
+policy.
+
+For a source rectangle of height `h`, zero-based iteration `i` targets that rectangle translated
+down by exactly `i * h` rows. The complete translated rectangle is reserved, including sparse or
+blank cells that have no rendered value. The original source rectangle is owned by the first
+iteration and is exempt from destination-occupancy checks because its template tags and static body
+content are intentionally consumed.
+
+Every later destination cell must be value-empty in the immutable source template. A cell whose
+workbook value is `null` remains writable when it has direct formatting, protection, or row/column
+presentation. Values such as `0`, `false`, an empty string, whitespace, formulas, and template tags
+are occupied. An occupied cell anywhere in a translated rectangle produces `E1401
+LAYOUT_COLLISION` at that destination, even when the corresponding source cell is blank or would
+evaluate to `null`. Rendering remains atomic and returns no plan or workbook after such a collision.
+
+Item count alone determines the attempted output extent. Styles, blank cells, worksheet used
+ranges, and neighboring content never define or infer capacity. A repeat may therefore continue
+from a preformatted band into default blank cells until it reaches occupied content, an incompatible
+merge, a configured resource limit, or an XLSX grid boundary. Fewer items leave all unused prepared
+cells unchanged.
+
+Rendered content uses its source expression and lexical scope, but presentation comes from the
+destination cell. Existing destination font, fill, border, alignment, number format, protection,
+quote-prefix behavior, row properties, and column properties remain authoritative. A destination
+that did not exist as a material source cell uses ordinary worksheet defaults; source presentation
+is not cloned into it.
+
+Merged-cell topology must already be prepared at every destination instance. Each merge contained
+by the source body must have one exact translated destination merge, and no additional merge may
+intersect a translated footprint. Compatible merges remain at their authored coordinates rather
+than being inserted or translated. Incompatible topology produces `E2104
+MERGE_CROSSES_BLOCK_BOUNDARY`.
+
+The first implementation does not allow a `shift="none"` repeat to contain another structural
+block. Nested fixed-stride and variable-height layouts require a separate explicit contract rather
+than inheriting compaction or growth behavior accidentally. A no-shift repeat may itself appear
+inside another structural construct; its parent still controls movement of the completed containing
+layout according to the parent's own policy.
+
+### 8.5 Explicit regions and isolation
 
 An explicit rectangular `region` is a layout container and isolation boundary. It uses the same opposite-corner marker model as other structural constructs:
 
@@ -231,7 +282,7 @@ For example, a completed `A1:J10` region that requires four additional rows move
 
 Children remain subject to the normal nested/disjoint rectangle rules. Partial overlaps, ambiguous marker pairing, output collisions, and merged ranges that cross a region or cell-shift boundary are errors. Row heights are worksheet-wide and cannot move independently for only part of a row; `shift="cells"` therefore moves cell content and cell formatting within its column band but does not translate worksheet row dimensions.
 
-### 8.5 Empty collections
+### 8.6 Empty collections
 
 An empty collection retains exactly one instance of the source block.
 
@@ -248,9 +299,14 @@ ordered collection. A missing `for` collection is an error under every `MissingO
 never inferred to mean an empty collection. A present `null` or another non-collection value remains
 a collection-type error.
 
-### 8.6 Layout planning
+### 8.7 Layout planning
 
 Each AST node first reports its measured output size. Parent nodes then allocate destinations to children. This bottom-up measurement followed by top-down placement produces a coordinate transformation from source cells to output cells.
+
+The render IR distinguishes the source of evaluated content from the source of cell presentation.
+Those coordinates are normally identical; a no-shift repeat instead associates repeated content
+with each fixed destination's presentation or with worksheet defaults when the destination was not
+material in the template.
 
 The transformation is used consistently for cells, merges, row heights, column widths, and
 supported workbook objects whose individual feature contract requires coordinate transformation.
@@ -626,6 +682,9 @@ finite-number boundary. Arithmetic returns one scalar and has no effect on scope
 
 Formula copying, translation, and calculation are outside the first release. A formula must never be treated as an ordinary string and copied into a new position with potentially incorrect references.
 
+A formula in a later `shift="none"` destination is occupied even when Excel would display an empty
+string. The fixed repeat reports `E1401` before formula preservation or translation is considered.
+
 The first-release validator rejects a formula when a structural transformation would copy it, move it, or require its references to be adjusted. Formula cells that can be proven unaffected may be preserved verbatim. If the implementation cannot prove that a formula is unaffected, it must reject the template rather than silently risk changing its meaning.
 
 Full formula support may be designed later as a separate transformation pass over parsed Excel references. It must not use regular-expression substitution over formula text.
@@ -634,9 +693,10 @@ Full formula support may be designed later as a separate transformation pass ove
 
 ### 13.1 Styles
 
-The template cell is authoritative for presentation. Every rendered cell copies the effective
-direct formatting of its source template cell. The renderer does not infer formatting from the
-value, field name, headers, or neighboring cells.
+The template cell that supplies rendered content is normally authoritative for presentation. Every
+rendered cell copies that cell's effective direct formatting under row and cell shifting. For
+`shift="none"`, the fixed destination cell is authoritative instead. The renderer does not infer
+formatting from the value, field name, headers, or neighboring cells.
 
 Repeated and shifted cells copy:
 
@@ -648,20 +708,23 @@ Repeated and shifted cells copy:
 - protection
 
 A formatted blank cell is a material template cell. It participates in source-to-destination
-mapping and is copied even though its value is blank. This is required for continuous fills,
+mapping and is copied even though its value is blank. It is also a writable fixed destination under
+`shift="none"`, where its own presentation is retained. This is required for continuous fills,
 borders, alignment, protected entry areas, and merged-range presentation.
 
 A cell containing only structural directive text remains a material blank cell after the
 directive is removed. Its direct formatting is copied exactly like any other formatted blank;
 removing template syntax must not expose Excel's default fill or borders.
 
-Formatting is copied exactly per source cell and per repeated instance. The engine does not
-recompute outer borders, alternating stripes, first/last-row styles, or other contextual table
-effects. Such behavior requires an explicit future language feature rather than inference.
+Formatting is copied exactly per source cell and per repeated instance except under `shift="none"`,
+which retains each destination's authored formatting. The engine does not recompute outer borders,
+alternating stripes, first/last-row styles, or other contextual table effects. Alternating fixed
+rows can instead be authored directly and filled with `shift="none"`.
 
-The source number format remains authoritative for rendered values. Authors format placeholder
-cells as dates, currency, percentages, or other Excel formats in the template. The renderer does
-not select a number format from a variable name or runtime type.
+The content source's number format remains authoritative for row and cell shifting; the fixed
+destination's number format is authoritative under `shift="none"`. Authors format placeholder or
+fixed destination cells as dates, currency, percentages, or other Excel formats in the template.
+The renderer does not select a number format from a variable name or runtime type.
 
 Styles should be reused/deduplicated where possible to prevent excessive workbook style records.
 The first production adapter guarantees the effective cell appearance, not preservation of named
@@ -681,6 +744,11 @@ height is worksheet-wide. A cell-shift block that would repeat a row with an exp
 is rejected in the first production adapter. It may use the worksheet's existing/default row
 heights instead.
 
+`shift="none"` never copies the repeat source row's dimensions. Every fixed destination row keeps
+its own authored row properties, including a custom height, and rows beyond authored presentation
+use worksheet defaults. An authored row dimension is carried through row provenance even when that
+row contains no material cell and is not reached by the collection.
+
 Vertical rendering does not create columns. Existing column width, hidden state, outline level,
 collapsed state, best-fit state, and safely representable column-level style are preserved. A later
 horizontal layout phase must introduce explicit source-to-destination column mappings.
@@ -688,6 +756,8 @@ horizontal layout phase must introduce explicit source-to-destination column map
 ### 13.3 Merged cells
 
 - A merge fully contained within a repeated block is reproduced for every block instance.
+- Under `shift="none"`, contained merges are not reproduced: exact translated merges must already
+  exist at every destination and remain in place.
 - A merge outside a block is transformed when its cells are shifted.
 - A block boundary or shift lane may not split a merged range.
 - Only the top-left cell of a merged range may receive a rendered value.
@@ -937,7 +1007,7 @@ loop.length
 
 ### 15.8 Layout planner
 
-Measures expanded nodes, allocates destination rectangles, produces coordinate transformations, and detects collisions. It has no dependency on live `openpyxl` worksheet mutation.
+Measures expanded nodes, allocates destination rectangles, produces coordinate transformations, and detects collisions. For `shift="none"`, it checks complete fixed footprints against immutable source occupancy, preserves separate content and presentation provenance, and validates exact prepared merge topology. It has no dependency on live `openpyxl` worksheet mutation.
 
 ### 15.9 Workbook writer
 
@@ -982,6 +1052,10 @@ Examples:
 - `E1402 OVERLAPPING_ROW_SHIFTS`
 - `E2104 MERGE_CROSSES_BLOCK_BOUNDARY`
 - `E3101 FORMULA_REQUIRES_UNSUPPORTED_TRANSFORM`
+
+`E1401` covers both competing planned allocations and an occupied `shift="none"` destination; the
+diagnostic location is the obstructing destination cell. `E2104` also covers a no-shift footprint
+whose authored destination merges do not exactly match the source body's translated merge topology.
 
 Rendering is atomic with respect to errors: any error prevents an output workbook from being
 returned as successful. Warnings do not prevent a plan or workbook from being returned. A render
@@ -1090,6 +1164,9 @@ A compiled template may be cacheable if it does not retain mutable `openpyxl` ob
 - cell, row, and column expansion
 - collision detection
 - merged-range transforms
+- fixed no-shift placement into styled and default blank destinations
+- occupied fixed-footprint collisions and exact prepared merge compatibility
+- preservation of destination presentation and row properties
 - successful planning with missing-output warnings and fatal handling of every non-missing error
 
 Most layout tests should operate without `openpyxl`.
@@ -1135,7 +1212,7 @@ Phase 0 accepts a two-dimensional in-memory worksheet representation and produce
 ### Phase 2: vertical repeat blocks
 
 - `direction="down"`
-- `shift="rows"` and `shift="cells"`
+- `shift="rows"`, `shift="cells"`, and fixed `shift="none"` placement
 - vertical `region` containers and explicit external shift boundaries
 - styles, row heights, and merges
 - empty collections and nested vertical repeats
@@ -1163,7 +1240,7 @@ Completion of Phase 3 constitutes the first usable language release.
 
 ## 21. Resolved region design
 
-Vertical isolation regions use the explicit opposite-corner syntax and completed-layout behavior defined in section 8.4. Horizontal regions and mixed-direction nesting remain deferred to Phase 4; they must not be inferred from the vertical rules without a separate language-design review.
+Vertical isolation regions use the explicit opposite-corner syntax and completed-layout behavior defined in section 8.5. Horizontal regions and mixed-direction nesting remain deferred to Phase 4; they must not be inferred from the vertical rules without a separate language-design review.
 
 ## 22. Library rationale and known constraints
 

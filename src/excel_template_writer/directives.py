@@ -123,11 +123,16 @@ def _parse_options(source: str, *, owner: str) -> dict[str, str]:
     return options
 
 
-def _validate_layout_options(options: dict[str, str]) -> tuple[str, str]:
+def _validate_layout_options(
+    options: dict[str, str],
+    *,
+    allowed_shifts: tuple[str, ...],
+) -> tuple[str, str]:
     """Apply defaults and validate currently supported layout option values.
 
     Args:
         options: Parsed directive options.
+        allowed_shifts: Shift values supported by the owning directive.
 
     Returns:
         The normalized ``(direction, shift)`` pair.
@@ -140,8 +145,9 @@ def _validate_layout_options(options: dict[str, str]) -> tuple[str, str]:
     shift = options.get("shift", "rows")
     if direction != "down":
         raise DirectiveSyntaxError('direction must be "down"')
-    if shift not in {"rows", "cells"}:
-        raise DirectiveSyntaxError('shift must be "rows" or "cells"')
+    if shift not in allowed_shifts:
+        choices = " or ".join(f'"{value}"' for value in allowed_shifts)
+        raise DirectiveSyntaxError(f"shift must be {choices}")
     return direction, shift
 
 
@@ -169,7 +175,10 @@ def _parse_for(source: str) -> ForDirective:
     expression_source = remainder if option_start is None else remainder[:option_start]
     option_source = "" if option_start is None else remainder[option_start:]
     iterable = compile_expression(expression_source.strip())
-    direction, shift = _validate_layout_options(_parse_options(option_source, owner="loop"))
+    direction, shift = _validate_layout_options(
+        _parse_options(option_source, owner="loop"),
+        allowed_shifts=("rows", "cells", "none"),
+    )
     return ForDirective(variable, iterable, direction, shift)
 
 
@@ -186,7 +195,10 @@ def _parse_region(source: str) -> RegionDirective:
         DirectiveSyntaxError: If a region option is invalid.
     """
 
-    direction, shift = _validate_layout_options(_parse_options(source, owner="region"))
+    direction, shift = _validate_layout_options(
+        _parse_options(source, owner="region"),
+        allowed_shifts=("rows", "cells"),
+    )
     return RegionDirective(direction, shift)
 
 

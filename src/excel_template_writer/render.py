@@ -63,6 +63,8 @@ class PlannedCell:
     value: Any
     source_coordinate: Coordinate
     instance_path: tuple[int, ...] = ()
+    presentation_coordinate: Coordinate | None = None
+    writable_destination: bool = False
 
 
 @dataclass(frozen=True)
@@ -114,6 +116,7 @@ class _Block:
     cells: dict[Coordinate, PlannedCell]
     rows: dict[int, PlannedRow]
     merges: list[PlannedMerge]
+    reservations: set[Coordinate]
     height: int
     width: int
 
@@ -267,7 +270,14 @@ class _Renderer:
         """
 
         if not cell.parts:
-            return PlannedCell(cell.coordinate, None, cell.coordinate, path)
+            return PlannedCell(
+                cell.coordinate,
+                None,
+                cell.coordinate,
+                path,
+                cell.coordinate,
+                self.compiled.template.cells[cell.coordinate] is None,
+            )
         values: list[Any] = []
         for part in cell.parts:
             if isinstance(part, LiteralPart):
@@ -361,7 +371,14 @@ class _Renderer:
                 f"cell text exceeds the XLSX limit of {XLSX_MAX_CELL_TEXT_LENGTH:,} characters",
                 SourceLocation(self.compiled.template.name, cell.coordinate.a1),
             )
-        return PlannedCell(cell.coordinate, value, cell.coordinate, path)
+        return PlannedCell(
+            cell.coordinate,
+            value,
+            cell.coordinate,
+            path,
+            cell.coordinate,
+            self.compiled.template.cells[cell.coordinate] is None,
+        )
 
     def evaluate_region_expression(
         self,
@@ -434,7 +451,8 @@ class _Renderer:
             left: Local left edge of the child lane.
             right: Local right edge of the child lane.
             delta: Signed change in child height.
-            shift: ``"rows"`` for global movement or ``"cells"`` for lane movement.
+            shift: ``"rows"`` for global movement, ``"cells"`` for lane movement,
+                or ``"none"`` for a fixed grid.
             replacement_height: Completed child height used to remove contracted rows.
             top: Original local top row of the child.
             location: Source location used for collision diagnostics.
@@ -443,10 +461,13 @@ class _Renderer:
             A new destination grid with affected cells translated.
         """
 
+        if shift == "none":
+            return dict(grid)
+
         shifted: dict[Coordinate, PlannedCell] = {}
         eliminated_start = top + replacement_height
         for coordinate, cell in grid.items():
-            in_lane = shift == "rows" or left <= coordinate.column <= right
+            in_lane = shift == "rows" or (shift == "cells" and left <= coordinate.column <= right)
             if delta < 0 and in_lane and eliminated_start <= coordinate.row <= bottom:
                 continue
             new_coordinate = coordinate
@@ -460,6 +481,48 @@ class _Renderer:
                 )
                 continue
             shifted[new_coordinate] = replace(cell, coordinate=new_coordinate)
+        return shifted
+
+    def shift_reservations(
+        self,
+        reservations: set[Coordinate],
+        *,
+        bottom: int,
+        left: int,
+        right: int,
+        delta: int,
+        shift: str,
+        replacement_height: int,
+        top: int,
+    ) -> set[Coordinate]:
+        """Move fixed-footprint reservations with their containing layout.
+
+        Args:
+            reservations: Current local reserved coordinates.
+            bottom: Original local bottom row of the child.
+            left: Local left edge of the child lane.
+            right: Local right edge of the child lane.
+            delta: Signed change in child height.
+            shift: Child shift policy.
+            replacement_height: Completed child height used to remove contracted rows.
+            top: Original local top row of the child.
+
+        Returns:
+            Reserved coordinates after applying the same displacement as planned cells.
+        """
+
+        if shift == "none":
+            return set(reservations)
+
+        shifted: set[Coordinate] = set()
+        eliminated_start = top + replacement_height
+        for coordinate in reservations:
+            in_lane = shift == "rows" or (shift == "cells" and left <= coordinate.column <= right)
+            if delta < 0 and in_lane and eliminated_start <= coordinate.row <= bottom:
+                continue
+            if in_lane and coordinate.row > bottom:
+                coordinate = Coordinate(coordinate.row + delta, coordinate.column)
+            shifted.add(coordinate)
         return shifted
 
     def shift_rows(
@@ -518,6 +581,9 @@ class _Renderer:
             Merged-range plans with affected rectangles translated.
         """
 
+        if shift == "none":
+            return list(merges)
+
         shifted: list[PlannedMerge] = []
         for merge in merges:
             in_lane = shift == "rows" or (
@@ -529,13 +595,85 @@ class _Renderer:
             shifted.append(replace(merge, rectangle=rectangle))
         return shifted
 
-    def add_child_cells(
+    def validate_child_allocations(
         self,
+        reservations: set[Coordinate],
         grid: dict[Coordinate, PlannedCell],
         child: _Block,
         *,
         top: int,
         left: int,
+        parent_rectangle: Rectangle,
+    ) -> None:
+        """Reject cells or fixed footprints that claim an existing reservation.
+
+        Args:
+            reservations: Fixed coordinates already owned in the parent block.
+            grid: Current parent destination grid.
+            child: Completed child block in local coordinates.
+            top: Parent-local destination top row.
+            left: Parent-local destination left column.
+            parent_rectangle: Source rectangle owning the local destination grid.
+        """
+
+        child_cells = {
+            Coordinate(top + coordinate.row - 1, left + coordinate.column - 1)
+            for coordinate in child.cells
+        }
+        child_reservations = {
+            Coordinate(top + coordinate.row - 1, left + coordinate.column - 1)
+            for coordinate in child.reservations
+        }
+        collisions = (child_cells | child_reservations).intersection(reservations)
+        for destination in child_reservations:
+            existing = grid.get(destination)
+            if existing is not None and not existing.writable_destination:
+                collisions.add(destination)
+        if not collisions:
+            return
+        destination = min(collisions)
+        absolute_destination = Coordinate(
+            parent_rectangle.top + destination.row - 1,
+            parent_rectangle.left + destination.column - 1,
+        )
+        self.diagnostic(
+            DiagnosticCode.LAYOUT_COLLISION,
+            f"fixed footprint is occupied at {absolute_destination.a1}",
+            SourceLocation(self.compiled.template.name, absolute_destination.a1),
+        )
+
+    def add_child_reservations(
+        self,
+        reservations: set[Coordinate],
+        child: _Block,
+        *,
+        top: int,
+        left: int,
+    ) -> None:
+        """Place a child's fixed-footprint reservations in its parent block.
+
+        Args:
+            reservations: Mutable parent reservation set.
+            child: Completed child block in local coordinates.
+            top: Parent-local destination top row.
+            left: Parent-local destination left column.
+        """
+
+        reservations.update(
+            Coordinate(top + coordinate.row - 1, left + coordinate.column - 1)
+            for coordinate in child.reservations
+        )
+
+    def add_child_cells(
+        self,
+        grid: dict[Coordinate, PlannedCell],
+        child: _Block,
+        *,
+        bottom: int,
+        top: int,
+        left: int,
+        right: int,
+        shift: str,
         location: SourceLocation,
     ) -> None:
         """Place a completed child grid into its parent allocation.
@@ -543,27 +681,45 @@ class _Renderer:
         Args:
             grid: Mutable parent destination grid.
             child: Completed child block in local coordinates.
+            bottom: Original parent-local bottom row of the child.
             top: Parent-local destination top row.
             left: Parent-local destination left column.
+            right: Original parent-local right column of the child.
+            shift: Child shift policy.
             location: Source location used for collision diagnostics.
         """
 
+        source_area = Rectangle(top, left, bottom, right)
         for coordinate, cell in child.cells.items():
             destination = Coordinate(top + coordinate.row - 1, left + coordinate.column - 1)
-            if destination in grid:
+            existing = grid.get(destination)
+            if existing is not None and not (shift == "none" and existing.writable_destination):
+                if coordinate in child.reservations:
+                    continue
                 self.diagnostic(
                     DiagnosticCode.LAYOUT_COLLISION,
                     f"two source cells allocate destination {destination.a1}",
                     location,
                 )
                 continue
-            grid[destination] = replace(cell, coordinate=destination)
+            presentation_coordinate = cell.presentation_coordinate
+            if shift == "none" and not source_area.contains_coordinate(destination):
+                presentation_coordinate = (
+                    existing.presentation_coordinate if existing is not None else None
+                )
+            grid[destination] = replace(
+                cell,
+                coordinate=destination,
+                presentation_coordinate=presentation_coordinate,
+                writable_destination=False,
+            )
 
     def add_child_rows(
         self,
         rows: dict[int, PlannedRow],
         child: _Block,
         *,
+        parent_source_top: int,
         top: int,
         shift: str,
     ) -> None:
@@ -572,35 +728,65 @@ class _Renderer:
         Args:
             rows: Mutable parent row-provenance mapping.
             child: Completed child block.
+            parent_source_top: Absolute source row corresponding to parent-local row one.
             top: Parent-local destination top row.
             shift: Child shift policy.
         """
 
-        if shift != "rows":
+        if shift not in {"rows", "none"}:
             return
         for destination_row, row in child.rows.items():
             absolute_row = top + destination_row - 1
-            rows[absolute_row] = replace(row, destination_row=absolute_row)
+            source_row = row.source_row if shift == "rows" else parent_source_top + absolute_row - 1
+            rows[absolute_row] = replace(
+                row,
+                destination_row=absolute_row,
+                source_row=source_row,
+            )
 
     def add_child_merges(
         self,
         merges: list[PlannedMerge],
         child: _Block,
         *,
+        bottom: int,
         top: int,
         left: int,
+        right: int,
+        shift: str,
     ) -> None:
         """Place completed child merges and report any overlap.
 
         Args:
             merges: Mutable parent merged-range plans.
             child: Completed child block.
+            bottom: Original parent-local bottom row of the child.
             top: Parent-local destination top row.
             left: Parent-local destination left column.
+            right: Original parent-local right column of the child.
+            shift: Child shift policy.
         """
 
+        source_area = Rectangle(top, left, bottom, right)
         for merge in child.merges:
             rectangle = merge.rectangle.translated(rows=top - 1, columns=left - 1)
+            if shift == "none":
+                exact = next(
+                    (existing for existing in merges if existing.rectangle == rectangle),
+                    None,
+                )
+                if exact is not None:
+                    merges.remove(exact)
+                merges.append(
+                    replace(
+                        merge,
+                        rectangle=rectangle,
+                        source_rectangle=(
+                            merge.source_rectangle if source_area.contains(rectangle) else rectangle
+                        ),
+                    )
+                )
+                continue
             if any(rectangle.intersects(existing.rectangle) for existing in merges):
                 self.diagnostic(
                     DiagnosticCode.LAYOUT_COLLISION,
@@ -644,6 +830,7 @@ class _Renderer:
             ),
         )
         grid: dict[Coordinate, PlannedCell] = {}
+        reservations: set[Coordinate] = set()
         rows = {
             local_row: PlannedRow(
                 local_row,
@@ -698,6 +885,16 @@ class _Renderer:
                 top=child_top,
                 location=child_node.span.location,
             )
+            reservations = self.shift_reservations(
+                reservations,
+                bottom=child_bottom,
+                left=child_left,
+                right=child_right,
+                delta=delta,
+                shift=shift,
+                replacement_height=child.height,
+                top=child_top,
+            )
             rows = self.shift_rows(
                 rows,
                 top=child_top,
@@ -713,28 +910,58 @@ class _Renderer:
                 delta=delta,
                 shift=shift,
             )
-            self.add_child_cells(
+            self.validate_child_allocations(
+                reservations,
                 grid,
                 child,
                 top=child_top,
                 left=child_left,
+                parent_rectangle=rectangle,
+            )
+            self.add_child_cells(
+                grid,
+                child,
+                bottom=child_bottom,
+                top=child_top,
+                left=child_left,
+                right=child_right,
+                shift=shift,
                 location=child_node.span.location,
             )
-            self.add_child_rows(rows, child, top=child_top, shift=shift)
-            self.add_child_merges(
-                merges,
+            self.add_child_reservations(
+                reservations,
                 child,
                 top=child_top,
                 left=child_left,
+            )
+            self.add_child_rows(
+                rows,
+                child,
+                parent_source_top=rectangle.top,
+                top=child_top,
+                shift=shift,
+            )
+            self.add_child_merges(
+                merges,
+                child,
+                bottom=child_bottom,
+                top=child_top,
+                left=child_left,
+                right=child_right,
+                shift=shift,
             )
             if shift == "rows":
                 height += delta
             else:
                 height = max(height, child_top + child.height - 1)
         height = max(height, max((coordinate.row for coordinate in grid), default=0))
+        height = max(height, max((coordinate.row for coordinate in reservations), default=0))
         height = max(height, max(rows, default=0))
+        allocated_cells = len(reservations) + sum(
+            coordinate not in reservations for coordinate in grid
+        )
         self.check_block_limits(
-            cells=len(grid),
+            cells=allocated_cells,
             height=height,
             width=rectangle.width,
             location=SourceLocation(
@@ -744,7 +971,50 @@ class _Renderer:
         )
         for destination_row in range(1, height + 1):
             rows.setdefault(destination_row, PlannedRow(destination_row, None, path))
-        return _Block(grid, rows, merges, max(0, height), rectangle.width)
+        return _Block(grid, rows, merges, reservations, max(0, height), rectangle.width)
+
+    def validate_no_shift_merges(
+        self,
+        node: ForNode,
+        *,
+        iterations: int,
+    ) -> None:
+        """Validate fixed destinations against the authored merge topology.
+
+        Args:
+            node: Fixed-stride repeat being rendered.
+            iterations: Number of physical instances, including an empty placeholder.
+        """
+
+        footprint = Rectangle(
+            node.rectangle.top,
+            node.rectangle.left,
+            node.rectangle.top + iterations * node.rectangle.height - 1,
+            node.rectangle.right,
+        )
+        source_merges = {
+            merge
+            for merge in self.compiled.template.merged_ranges
+            if node.rectangle.contains(merge)
+        }
+        expected_merges = {
+            merge.translated(rows=index * node.rectangle.height)
+            for index in range(iterations)
+            for merge in source_merges
+        }
+        intersecting_merges = {
+            merge for merge in self.compiled.template.merged_ranges if merge.intersects(footprint)
+        }
+        incompatible_merges = expected_merges.symmetric_difference(intersecting_merges)
+        incompatible_coordinates = sorted(
+            {Coordinate(merge.top, merge.left) for merge in incompatible_merges}
+        )
+        for coordinate in incompatible_coordinates:
+            self.diagnostic(
+                DiagnosticCode.MERGE_CROSSES_BLOCK_BOUNDARY,
+                'shift="none" destination merge topology does not match the source body',
+                SourceLocation(self.compiled.template.name, coordinate.a1),
+            )
 
     def render_region(
         self,
@@ -794,7 +1064,7 @@ class _Renderer:
                     node.span.location,
                 )
             blocks: list[_Block] = []
-            rendered_cells = 0
+            rendered_allocations = 0
             rendered_height = 0
             if items:
                 for index, item in enumerate(items):
@@ -808,10 +1078,12 @@ class _Renderer:
                         (*path, index),
                     )
                     blocks.append(block)
-                    rendered_cells += len(block.cells)
+                    rendered_allocations += len(block.reservations) + sum(
+                        coordinate not in block.reservations for coordinate in block.cells
+                    )
                     rendered_height += block.height
                     self.check_block_limits(
-                        cells=rendered_cells,
+                        cells=rendered_allocations,
                         height=rendered_height,
                         width=node.rectangle.width,
                         location=node.span.location,
@@ -828,6 +1100,7 @@ class _Renderer:
             grid: dict[Coordinate, PlannedCell] = {}
             rows: dict[int, PlannedRow] = {}
             merges: list[PlannedMerge] = []
+            reservations: set[Coordinate] = set()
             row_offset = 0
             for block in blocks:
                 for coordinate, cell in block.cells.items():
@@ -843,15 +1116,40 @@ class _Renderer:
                             rectangle=merge.rectangle.translated(rows=row_offset),
                         )
                     )
+                reservations.update(
+                    Coordinate(coordinate.row + row_offset, coordinate.column)
+                    for coordinate in block.reservations
+                )
                 row_offset += block.height
-            return _Block(grid, rows, merges, row_offset, node.rectangle.width)
+            if node.shift == "none":
+                self.validate_no_shift_merges(node, iterations=len(blocks))
+                reservation_cells = row_offset * node.rectangle.width
+                self.check_block_limits(
+                    cells=reservation_cells,
+                    height=row_offset,
+                    width=node.rectangle.width,
+                    location=node.span.location,
+                )
+                reservations.update(
+                    Coordinate(row, column)
+                    for row in range(1, row_offset + 1)
+                    for column in range(1, node.rectangle.width + 1)
+                )
+            return _Block(
+                grid,
+                rows,
+                merges,
+                reservations,
+                row_offset,
+                node.rectangle.width,
+            )
 
         if isinstance(node, IfNode):
             raw_condition = self.evaluate_region_expression(node, scope)
             selected = raw_condition is not _EVALUATION_FAILED and bool(raw_condition)
             branch = node.true_rectangle if selected else node.false_rectangle
             if branch is None:
-                return _Block({}, {}, [], 0, node.rectangle.width)
+                return _Block({}, {}, [], set(), 0, node.rectangle.width)
             branch_children = tuple(
                 child for child in node.children if branch.contains(child.rectangle)
             )
@@ -866,6 +1164,7 @@ def render_sheet(
     missing_output: MissingOutputPolicy | str = MissingOutputPolicy.ERROR,
     adapters: Iterable[TypeAdapter[Any]] = (),
     limits: ResourceLimits = DEFAULT_RESOURCE_LIMITS,
+    preserved_source_rows: Iterable[int] = (),
 ) -> RenderResult:
     """Evaluate a compiled sheet into an adapter-neutral render plan.
 
@@ -875,12 +1174,15 @@ def render_sheet(
         missing_output: Policy for missing values in output tags.
         adapters: Explicit runtime-type adapters used during normalization.
         limits: Resource ceilings for normalization and planning.
+        preserved_source_rows: Explicit row coordinates whose layout provenance must be planned
+            even when they contain no material cells.
 
     Returns:
         A complete render plan or structured diagnostics; never a partial plan.
 
     Raises:
-        ValueError: If ``missing_output`` is not a supported policy.
+        ValueError: If ``missing_output`` is unsupported or a preserved row is not a positive
+            integer.
     """
 
     try:
@@ -890,10 +1192,19 @@ def render_sheet(
     normalization = normalize_context(context, adapters=adapters, limits=limits)
     if normalization.context is None:
         return RenderResult(None, normalization.diagnostics)
+    preserved_rows = tuple(preserved_source_rows)
+    if any(type(row) is not int or row < 1 for row in preserved_rows):
+        raise ValueError("preserved_source_rows must contain one-based row coordinates")
+    root_rectangle = Rectangle(
+        compiled.rectangle.top,
+        compiled.rectangle.left,
+        max((compiled.rectangle.bottom, *preserved_rows)),
+        compiled.rectangle.right,
+    )
     renderer = _Renderer(compiled, limits, missing_output_policy)
     try:
         block = renderer.render_area(
-            compiled.rectangle,
+            root_rectangle,
             compiled.children,
             normalization.context,
             frozenset(),

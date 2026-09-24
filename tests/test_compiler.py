@@ -26,6 +26,36 @@ def test_links_opposite_corners_into_a_rectangular_for_node() -> None:
     assert node.shift == "rows"
 
 
+def test_accepts_fixed_no_shift_for_loop() -> None:
+    template = WorksheetTemplate.from_rows(
+        "Report",
+        [['{% for row in rows shift="none" %}{{ row.name }}{% endfor %}']],
+    )
+
+    node = compile_sheet(template).require().children[0]
+
+    assert isinstance(node, ForNode)
+    assert node.shift == "none"
+
+
+def test_rejects_structural_children_inside_fixed_no_shift_loop() -> None:
+    template = WorksheetTemplate.from_rows(
+        "Report",
+        [
+            ['{% for item in items shift="none" %}{{ item.name }}', None],
+            ["{% if item.show %}Shown{% endif %}", "{% endfor %}"],
+        ],
+    )
+
+    result = compile_sheet(template)
+
+    assert result.compiled is None
+    assert [diagnostic.code for diagnostic in result.diagnostics] == [
+        DiagnosticCode.INVALID_BLOCK_GEOMETRY
+    ]
+    assert 'shift="none" repeat cannot contain structural blocks' in result.diagnostics[0].message
+
+
 def test_links_stacked_equal_width_if_else_branches() -> None:
     template = WorksheetTemplate.from_rows(
         "Report",
@@ -101,6 +131,7 @@ def test_rejects_unsupported_region_direction() -> None:
     [
         'direction="down" direction="down"',
         'shift="columns"',
+        'shift="none"',
         'unknown="value"',
     ],
 )
@@ -201,6 +232,46 @@ def test_rejects_side_by_side_siblings_that_both_claim_row_insertion() -> None:
 
     assert result.compiled is None
     assert DiagnosticCode.OVERLAPPING_ROW_SHIFTS in {item.code for item in result.diagnostics}
+
+
+def test_allows_side_by_side_none_and_cell_shift_siblings() -> None:
+    template = WorksheetTemplate.from_rows(
+        "Report",
+        [
+            [
+                '{% for left in left_items shift="none" %}{{ left }}{% endfor %}',
+                None,
+                '{% for right in right_items shift="cells" %}{{ right }}{% endfor %}',
+            ]
+        ],
+    )
+
+    compiled = compile_sheet(template).require()
+
+    assert [node.shift for node in compiled.children if isinstance(node, ForNode)] == [
+        "none",
+        "cells",
+    ]
+
+
+def test_rejects_side_by_side_row_and_none_shift_siblings() -> None:
+    template = WorksheetTemplate.from_rows(
+        "Report",
+        [
+            [
+                "{% for left in left_items %}{{ left }}{% endfor %}",
+                '{% for right in right_items shift="none" %}{{ right }}{% endfor %}',
+            ]
+        ],
+    )
+
+    result = compile_sheet(template)
+
+    assert result.compiled is None
+    assert [diagnostic.code for diagnostic in result.diagnostics] == [
+        DiagnosticCode.OVERLAPPING_ROW_SHIFTS
+    ]
+    assert "must not use whole-row shifting" in result.diagnostics[0].message
 
 
 def test_reports_invalid_date_format_at_the_output_cell() -> None:

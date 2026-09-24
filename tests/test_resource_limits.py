@@ -122,6 +122,26 @@ def test_repeat_and_planned_cell_limits_fail_before_returning_a_plan() -> None:
     assert cell_result.diagnostics[0].code is DiagnosticCode.RENDER_RESOURCE_LIMIT_EXCEEDED
 
 
+def test_no_shift_reserved_footprint_counts_toward_the_planned_cell_limit() -> None:
+    template = WorksheetTemplate.from_cells(
+        "Report",
+        {
+            "A1": '{% for item in items shift="none" %}{{ item }}',
+            "C1": "{% endfor %}",
+        },
+    )
+    compiled = compile_sheet(template).require()
+
+    result = render_sheet(
+        compiled,
+        {"items": [1, 2]},
+        limits=ResourceLimits(max_planned_cells_per_sheet=5),
+    )
+
+    assert result.plan is None
+    assert result.diagnostics[0].code is DiagnosticCode.RENDER_RESOURCE_LIMIT_EXCEEDED
+
+
 def test_output_dimensions_and_excel_text_have_independent_hard_limits() -> None:
     oversized_grid = WorksheetTemplate.from_cells(
         "Report",
