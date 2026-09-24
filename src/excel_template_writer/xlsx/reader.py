@@ -700,8 +700,14 @@ def _read_sheet(
     for row in sheet.iter_rows():
         for cell in row:
             coordinate = Coordinate(cell.row, cell.column)
+            is_authored_empty_string = (
+                not isinstance(cell, MergedCell)
+                and cell.value is None
+                and getattr(cell, "data_type", None) in {"inlineStr", "s", "str"}
+            )
             is_material = (
                 cell.value is not None
+                or is_authored_empty_string
                 or cell.has_style
                 or getattr(cell, "hyperlink", None) is not None
                 or getattr(cell, "comment", None) is not None
@@ -709,7 +715,13 @@ def _read_sheet(
             )
             if not is_material:
                 continue
-            value = cell.value if not isinstance(cell, MergedCell) else None
+            value = (
+                ""
+                if is_authored_empty_string
+                else cell.value
+                if not isinstance(cell, MergedCell)
+                else None
+            )
             is_formula = getattr(cell, "data_type", None) == "f"
             values[coordinate] = value
             presentations[coordinate] = _cell_presentation(cell)

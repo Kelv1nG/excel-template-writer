@@ -652,6 +652,228 @@ def test_render_workbook_copies_values_direct_styles_styled_blanks_and_dimension
         rendered.close()
 
 
+def test_no_shift_preserves_each_destination_rows_existing_presentation(
+    tmp_path: Path,
+) -> None:
+    template_path = tmp_path / "fixed-fill-template.xlsx"
+    output_path = tmp_path / "fixed-fill-output.xlsx"
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Fixed fill"
+    sheet["A2"] = '{% for item in items shift="none" %}{{ item.label }}'
+    sheet["B2"] = "{{ item.amount }}"
+    sheet["C2"] = "{{ item.state }}{% endfor %}"
+    sheet["A6"] = "Footer"
+    colors = ("FFDDEBF7", "FFFFFFFF", "FFDDEBF7", "FFFFFFFF")
+    for row, color in zip(range(2, 6), colors, strict=True):
+        sheet.row_dimensions[row].height = 18 + row
+        for column in range(1, 4):
+            cell = sheet.cell(row, column)
+            cell.fill = PatternFill("solid", fgColor=color)
+            cell.font = Font(bold=row % 2 == 0, color="FF17365D")
+            cell.alignment = Alignment(horizontal="center")
+            cell.protection = Protection(locked=row % 2 == 0)
+        sheet.cell(row, 2).number_format = f'0.00" row {row}"'
+    for row in range(2, 7):
+        sheet.cell(row, 4).value = f"Neighbor {row}"
+    _save(workbook, template_path)
+    workbook.close()
+
+    render_workbook(
+        template_path,
+        output_path,
+        {
+            "items": [
+                {"label": "Alpha", "amount": 1.25, "state": "Open"},
+                {"label": "Beta", "amount": 2.5, "state": "Closed"},
+                {"label": "Gamma", "amount": 3.75, "state": "Open"},
+            ]
+        },
+    )
+
+    rendered = load_workbook(output_path)
+    try:
+        target = rendered["Fixed fill"]
+        assert [target[f"A{row}"].value for row in range(2, 6)] == [
+            "Alpha",
+            "Beta",
+            "Gamma",
+            None,
+        ]
+        assert [target[f"B{row}"].number_format for row in range(2, 6)] == [
+            '0.00" row 2"',
+            '0.00" row 3"',
+            '0.00" row 4"',
+            '0.00" row 5"',
+        ]
+        assert [target[f"A{row}"].fill.fgColor.rgb for row in range(2, 6)] == [
+            "FFDDEBF7",
+            "FFFFFFFF",
+            "FFDDEBF7",
+            "FFFFFFFF",
+        ]
+        assert [target[f"A{row}"].font.bold for row in range(2, 6)] == [
+            True,
+            False,
+            True,
+            False,
+        ]
+        assert [target.row_dimensions[row].height for row in range(2, 6)] == [20, 21, 22, 23]
+        assert target["A6"].value == "Footer"
+        assert [target[f"D{row}"].value for row in range(2, 7)] == [
+            "Neighbor 2",
+            "Neighbor 3",
+            "Neighbor 4",
+            "Neighbor 5",
+            "Neighbor 6",
+        ]
+    finally:
+        rendered.close()
+
+
+def test_no_shift_uses_default_style_for_an_unmaterialized_blank_destination(
+    tmp_path: Path,
+) -> None:
+    template_path = tmp_path / "default-slot-template.xlsx"
+    output_path = tmp_path / "default-slot-output.xlsx"
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet["A1"] = '{% for item in items shift="none" %}{{ item }}{% endfor %}'
+    sheet["A1"].fill = PatternFill("solid", fgColor="FFFF0000")
+    sheet["A1"].font = Font(bold=True)
+    sheet.row_dimensions[2].height = 42
+    _save(workbook, template_path)
+    workbook.close()
+
+    render_workbook(template_path, output_path, {"items": ["First", "=SECOND"]})
+
+    rendered = load_workbook(output_path, data_only=False)
+    try:
+        target = rendered.active
+        assert target["A1"].fill.fgColor.rgb == "FFFF0000"
+        assert target["A2"].value == "=SECOND"
+        assert target["A2"].data_type == "s"
+        assert target["A2"].fill.fill_type is None
+        assert target["A2"].font.bold is False
+        assert target["A2"].number_format == "General"
+        assert target.row_dimensions[2].height == 42
+    finally:
+        rendered.close()
+
+
+def test_no_shift_preserves_unused_row_dimensions_beyond_material_cells(
+    tmp_path: Path,
+) -> None:
+    template_path = tmp_path / "unused-row-dimension-template.xlsx"
+    output_path = tmp_path / "unused-row-dimension-output.xlsx"
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet["A1"] = '{% for item in items shift="none" %}{{ item }}{% endfor %}'
+    sheet.row_dimensions[3].height = 42
+    sheet.row_dimensions[3].hidden = True
+    _save(workbook, template_path)
+    workbook.close()
+
+    render_workbook(template_path, output_path, {"items": ["First", "Second"]})
+
+    rendered = load_workbook(output_path)
+    try:
+        target = rendered.active
+        assert target["A1"].value == "First"
+        assert target["A2"].value == "Second"
+        assert target.row_dimensions[3].height == 42
+        assert target.row_dimensions[3].hidden is True
+    finally:
+        rendered.close()
+
+
+def test_no_shift_collision_is_atomic_and_does_not_publish_a_workbook(tmp_path: Path) -> None:
+    template_path = tmp_path / "fixed-collision-template.xlsx"
+    output_path = tmp_path / "should-not-exist.xlsx"
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet["A1"] = '{% for item in items shift="none" %}{{ item }}{% endfor %}'
+    sheet["A2"] = "Occupied"
+    _save(workbook, template_path)
+    workbook.close()
+
+    with pytest.raises(TemplateRenderError) as caught:
+        render_workbook(template_path, output_path, {"items": ["First", "Second"]})
+
+    assert [diagnostic.code for diagnostic in caught.value.diagnostics] == [
+        DiagnosticCode.LAYOUT_COLLISION
+    ]
+    assert str(caught.value.diagnostics[0].location) == "Sheet!A2"
+    assert not output_path.exists()
+
+
+def test_no_shift_treats_an_authored_xlsx_empty_string_as_occupied(tmp_path: Path) -> None:
+    template_path = tmp_path / "empty-string-collision-template.xlsx"
+    output_path = tmp_path / "should-not-exist.xlsx"
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet["A1"] = '{% for item in items shift="none" %}{{ item }}{% endfor %}'
+    sheet["A2"] = ""
+    _save(workbook, template_path)
+    workbook.close()
+
+    with pytest.raises(TemplateRenderError) as caught:
+        render_workbook(template_path, output_path, {"items": ["First", "Second"]})
+
+    assert DiagnosticCode.LAYOUT_COLLISION in {
+        diagnostic.code for diagnostic in caught.value.diagnostics
+    }
+    collision = next(
+        diagnostic
+        for diagnostic in caught.value.diagnostics
+        if diagnostic.code is DiagnosticCode.LAYOUT_COLLISION
+    )
+    assert str(collision.location) == "Sheet!A2"
+    assert not output_path.exists()
+
+
+def test_no_shift_preserves_exact_prepared_destination_merges(tmp_path: Path) -> None:
+    template_path = tmp_path / "fixed-merge-template.xlsx"
+    output_path = tmp_path / "fixed-merge-output.xlsx"
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Prepared merges"
+    sheet.merge_cells("A1:B1")
+    sheet.merge_cells("A3:B3")
+    sheet["A1"] = '{% for item in items shift="none" %}{{ item.name }}'
+    sheet["A2"] = "{{ item.detail }}"
+    sheet["B2"] = "{% endfor %}"
+    sheet["A1"].fill = PatternFill("solid", fgColor="FFDDEBF7")
+    sheet["A3"].fill = PatternFill("solid", fgColor="FFFFF2CC")
+    sheet["A4"].fill = PatternFill("solid", fgColor="FFFFF2CC")
+    sheet["A5"] = "Footer"
+    _save(workbook, template_path)
+    workbook.close()
+
+    render_workbook(
+        template_path,
+        output_path,
+        {
+            "items": [
+                {"name": "First", "detail": "One"},
+                {"name": "Second", "detail": "Two"},
+            ]
+        },
+    )
+
+    rendered = load_workbook(output_path)
+    try:
+        target = rendered["Prepared merges"]
+        assert {str(merged) for merged in target.merged_cells.ranges} == {"A1:B1", "A3:B3"}
+        assert target["A1"].value == "First"
+        assert target["A3"].value == "Second"
+        assert target["A4"].value == "Two"
+        assert target["A3"].fill.fgColor.rgb == "FFFFF2CC"
+        assert target["A5"].value == "Footer"
+    finally:
+        rendered.close()
+
+
 def test_render_workbook_repeats_contained_merges_and_row_heights(tmp_path: Path) -> None:
     template_path = tmp_path / "cards.xlsx"
     output_path = tmp_path / "cards-output.xlsx"

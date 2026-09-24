@@ -150,6 +150,7 @@ def render_workbook(
             normalized_context,
             missing_output=missing_output_policy,
             limits=limits,
+            preserved_source_rows=sheet.rows,
         )
         if rendering.plan is None:
             if any(diagnostic.code in resource_codes for diagnostic in rendering.diagnostics):

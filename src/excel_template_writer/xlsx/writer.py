@@ -128,27 +128,36 @@ def _apply_column(destination: ColumnDimension, source: ColumnPresentation) -> N
     _apply_dimension_style(destination, source)
 
 
-def _apply_cell(destination: Cell, source: CellPresentation, value: object) -> None:
-    """Write one planned value and copy its direct source presentation.
+def _apply_cell(
+    destination: Cell,
+    presentation: CellPresentation | None,
+    value: object,
+    *,
+    content_is_formula: bool,
+) -> None:
+    """Write one planned value and apply its selected presentation.
 
     Args:
         destination: Mutable output cell.
-        source: Detached source cell presentation.
+        presentation: Detached presentation to apply, or ``None`` for defaults.
         value: Evaluated planned value to write.
+        content_is_formula: Whether the content source is an authored formula.
     """
 
     destination.value = value
-    if isinstance(value, str) and value.startswith("=") and not source.is_formula:
+    if isinstance(value, str) and value.startswith("=") and not content_is_formula:
         destination.data_type = "s"
-    destination.font = copy(source.font)
-    destination.fill = copy(source.fill)
-    destination.border = copy(source.border)
-    destination.alignment = copy(source.alignment)
-    destination.number_format = source.number_format
-    destination.protection = copy(source.protection)
-    destination.quotePrefix = source.quote_prefix
-    destination.hyperlink = copy(source.hyperlink)
-    destination.comment = copy(source.comment)
+    if presentation is None:
+        return
+    destination.font = copy(presentation.font)
+    destination.fill = copy(presentation.fill)
+    destination.border = copy(presentation.border)
+    destination.alignment = copy(presentation.alignment)
+    destination.number_format = presentation.number_format
+    destination.protection = copy(presentation.protection)
+    destination.quotePrefix = presentation.quote_prefix
+    destination.hyperlink = copy(presentation.hyperlink)
+    destination.comment = copy(presentation.comment)
 
 
 def _is_identity_plan(source: SheetSnapshot, plan: RenderPlan) -> bool:
@@ -621,9 +630,19 @@ def _write_sheet(
     for planned_cell in plan.cells:
         if planned_cell.source_coordinate in source.synthetic_drawing_anchor_cells:
             continue
-        presentation = source.cells[planned_cell.source_coordinate]
+        content_presentation = source.cells[planned_cell.source_coordinate]
+        presentation = (
+            None
+            if planned_cell.presentation_coordinate is None
+            else source.cells.get(planned_cell.presentation_coordinate)
+        )
         cell = destination.cell(planned_cell.coordinate.row, planned_cell.coordinate.column)
-        _apply_cell(cell, presentation, planned_cell.value)
+        _apply_cell(
+            cell,
+            presentation,
+            planned_cell.value,
+            content_is_formula=content_presentation.is_formula,
+        )
 
     for merge in plan.merges:
         destination.merge_cells(
