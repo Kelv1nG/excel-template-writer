@@ -189,7 +189,8 @@ At this point these objects are markers, not complete spatial blocks. A textual 
 - `StructuralNode` defines the shared geometry, children, shift policy, and source span expected by
   structural AST nodes;
 - `RegionNode` owns an explicit rectangular measurement and external-movement boundary;
-- `ForNode` owns a rectangle, loop variable, collection expression, shift policy, and nested regions;
+- `ForNode` owns a rectangle, loop variable, collection expression, and shift policy. Row- and
+  cell-shift loops may own nested regions; fixed no-shift loops currently require a flat body;
 - `IfNode` owns an overall rectangle, true and optional false rectangles, condition, inherited shift policy, and nested regions;
 - `CompiledSheet` owns immutable cells and the top-level region tree.
 
@@ -219,10 +220,15 @@ Each `PlannedCell` records:
 
 - its destination coordinate;
 - its evaluated value;
-- its original source coordinate;
+- its content source coordinate;
+- its presentation source coordinate, or worksheet-default presentation;
 - its loop instance path.
 
-The source-to-destination mapping lets a workbook writer copy presentation properties from the correct template cell without parsing the template again. The instance path distinguishes copies made by nested repeats.
+Content and presentation coordinates are normally the same. A `shift="none"` cell instead keeps
+the fixed destination's presentation while receiving content evaluated from the repeat source. The
+instance path distinguishes copies made by nested repeats. The workbook adapter also asks the
+planner to retain provenance for rows with authored dimensions but no material cells, so fixed
+custom heights survive and whole-row shifts still move those dimensions correctly.
 
 ## What compilation does
 
@@ -352,6 +358,12 @@ silently treating one as empty would change layout. For each present collection 
 
 Input order is preserved. Sorting, grouping, joining business records, and keyed reconciliation belong before rendering.
 
+A `shift="none"` repeat uses the authored rectangle height as a fixed stride. It overlays each
+evaluated instance onto the corresponding existing coordinates without translating any neighboring
+cell or row. Before returning a plan, the renderer checks the complete fixed footprint against raw
+template occupancy and exact prepared merge topology. Styled blanks are writable, and repeated
+content receives each destination's separate presentation provenance.
+
 For an empty collection, the body is rendered once without binding the loop variable. Expressions rooted at that absent variable become blank, while static content remains. This preserves one formatted placeholder instance.
 
 ### Conditional evaluation
@@ -364,12 +376,13 @@ a zero-height block. The containing shift policy closes the removed space.
 Conditions have no author-facing `shift` option. At top level they shift rows. Inside a
 `shift="cells"` loop or region they inherit that lane isolation.
 
-### Row shifting versus cell shifting
+### Row, cell, and fixed shifting
 
-When a child grows or shrinks, its height difference is applied in one of two ways:
+When a child grows or shrinks, its height difference is applied in one of three ways:
 
 - `shift="rows"` moves every cell below the block;
 - `shift="cells"` moves only cells below the block in columns intersecting the block.
+- `shift="none"` moves nothing and treats occupied fixed destinations as collisions.
 
 The planner checks the destination grid for collisions. It returns diagnostics rather than silently overwriting an earlier allocation.
 
@@ -459,7 +472,8 @@ openpyxl workbook
 The writer must consume the plan. It must not parse directives, evaluate expressions, or decide where rows belong. Its responsibilities are mechanical workbook operations such as writing typed values and applying planned transformations to styles, dimensions, merges, and supported metadata.
 
 The adapter is implemented in [`xlsx/`](../src/excel_template_writer/xlsx). It snapshots every
-material cell, including styled blanks; copies direct cell formatting from each planned source;
+material cell, including styled blanks; copies direct cell formatting from each planned
+presentation source (or leaves worksheet defaults for an unmaterialized fixed destination);
 applies planned row properties and merges; preserves an ordered worksheet drawing plan containing
 validated fixed-reference charts, embedded PNG/JPEG pictures, and static editable text shapes;
 applies planned anchor translations; writes atomically to a different path; and reloads the
@@ -476,7 +490,7 @@ the hosting platform.
 ## Current boundaries
 
 The executable system currently supports vertical repeats, explicit vertical isolation regions,
-row/cell shifts, scalar output, a small safe expression language with deterministic date-to-text
+row/cell shifts, fixed no-shift placement, scalar output, a small safe expression language with deterministic date-to-text
 formatting, collection aggregates, and basic numeric arithmetic, empty repeat placeholders,
 nested regions, stacked conditions, direct
 cell formatting, styled blanks, row/column properties, merged ranges, fixed-reference

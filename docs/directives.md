@@ -118,9 +118,10 @@ plan = result.require()  # W1301 warnings do not prevent a successful plan
 
 ### Excel formatting
 
-Format placeholder cells in Excel exactly as their output should appear. Every rendered destination
-inherits the source cell's font, fill, border, alignment, number format, and protection. This also
-applies to blank formatted cells in a repeated rectangle.
+Format placeholder cells in Excel exactly as their output should appear. Under `shift="rows"` and
+`shift="cells"`, every rendered destination inherits the source cell's font, fill, border,
+alignment, number format, and protection. Under `shift="none"`, each fixed destination keeps its
+own authored presentation instead. Blank formatted cells remain writable fixed destinations.
 
 For example, keep `{{ line.amount }}` as a numeric expression and give its template cell an Excel
 currency number format. Repeated values remain numeric and each copy receives that format. The
@@ -130,8 +131,12 @@ Whole-row repeats also copy explicit row height and supported row properties. `s
 cannot repeat a custom row height because Excel row height applies to the entire worksheet row; the
 adapter rejects that combination rather than changing neighboring lanes.
 
-Merged ranges fully contained in a block repeat with it. A merge crossing a block or cell-shift
-lane boundary is invalid.
+`shift="none"` keeps every destination row's existing row properties, including distinct custom
+heights. This is useful for fixed bands with alternating direct fills, borders, or number formats.
+
+Merged ranges fully contained in a row- or cell-shift block repeat with it. Under `shift="none"`,
+each destination must already contain an exact matching merge. A crossing or mismatched merge is
+invalid.
 
 ### Expression features
 
@@ -353,7 +358,7 @@ derived number reports `E1307`.
 ### Syntax
 
 ```text
-{% for <variable> in <collection-expression> [direction="down"] [shift="rows"|"cells"] %}
+{% for <variable> in <collection-expression> [direction="down"] [shift="rows"|"cells"|"none"] %}
 ...
 {% endfor %}
 ```
@@ -362,7 +367,8 @@ The loop variable must be a normal identifier and cannot begin with `_`. Options
 
 `direction="down"` is the only implemented direction and is the default. `direction="right"` is not accepted yet.
 
-`shift="rows"` is the default. `shift="cells"` is available when growth must be isolated to the block's columns.
+`shift="rows"` is the default. `shift="cells"` isolates movement to the block's columns.
+`shift="none"` fills fixed destinations without moving worksheet content.
 
 ### One-row rectangular repeat
 
@@ -453,6 +459,39 @@ C4: {% for right in right_items shift="cells" %}{{ right }}{% endfor %}
 ```
 
 Content below column A moves as the left list grows; content below column C moves independently as the right list grows.
+
+### `shift="none"`
+
+```text
+{% for item in items shift="none" %}...{% endfor %}
+```
+
+This mode fills existing worksheet positions and never inserts or shifts cells or rows. For a
+one-row block beginning at row 5, item one writes row 5, item two writes row 6, and so on. A
+multi-row block uses its complete authored height as the fixed stride.
+
+Every later destination rectangle must be value-empty before rendering. Direct styles, protection,
+number formats, and row heights do not make a blank cell occupied and are preserved per destination.
+Values, formulas, literal or template text, hyperlinks, comments, and incompatible merges are not
+safe fixed destinations and make rendering fail atomically. The collision diagnostic points to the
+obstructing cell.
+
+For example, authors can prepare alternating direct row colors in rows 5–12 and fill them without
+copying the first row's color:
+
+```text
+A5: {% for item in items shift="none" %}{{ item.label }}
+B5: {{ item.amount }}{% endfor %}
+```
+
+Rows not reached by the collection stay untouched. If the collection continues past the prepared
+band, it may use ordinary default blank cells; styles and the worksheet used range are never treated
+as an inferred capacity boundary. Put a real footer or other occupied content after the band when
+overflow must fail there.
+
+The first implementation does not allow structural loops, conditions, or regions inside a
+`shift="none"` body. A no-shift loop may itself be nested inside another construct; the parent still
+controls movement of its completed layout.
 
 ## `region` and `endregion`
 
@@ -655,8 +694,8 @@ This is an error. Use a loop to create cells or `join` to intentionally produce 
 
 ### Unknown or unsupported options
 
-Unknown directives, duplicate loop or region options, `direction="right"`, and shift modes other
-than `rows` or `cells` are rejected during compilation.
+Unknown directives, duplicate loop or region options, and `direction="right"` are rejected during
+compilation. Loops accept `rows`, `cells`, or `none`; regions accept only `rows` or `cells`.
 
 ## Diagnostic codes
 
@@ -683,7 +722,7 @@ than `rows` or `cells` are rejected during compilation.
 | `E1305` | Runtime value has the wrong type for numeric arithmetic |
 | `E1306` | Numeric division used a zero divisor |
 | `E1307` | An expression operation produced a non-finite number |
-| `E1401` | Two source allocations collided at one destination cell |
+| `E1401` | Two allocations collided, or a `shift="none"` footprint reached occupied content |
 | `E1402` | Sibling blocks have conflicting whole-row shift lanes |
 | `E1501` | Render context root is not a mapping |
 | `E1502` | Record key is not a string |
@@ -700,7 +739,7 @@ than `rows` or `cells` are rejected during compilation.
 | `E1602` | Rendering exceeded a configured repeat, cell, row, or column limit |
 | `E1603` | Rendered geometry exceeded an absolute XLSX grid limit |
 | `E1604` | Rendered cell text exceeded Excel's absolute character limit |
-| `E2104` | Merged range crosses a block or cell-shift lane boundary |
+| `E2104` | Merge crosses a boundary or does not match fixed no-shift destination topology |
 | `E2105` | Conditional formatting would require an unsupported transform |
 | `E2106` | Data validation would require an unsupported transform |
 | `E2107` | Native Excel Table is unsupported by the current writer |

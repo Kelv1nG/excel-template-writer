@@ -5,7 +5,8 @@ A spatial, declarative template interpreter for generating `.xlsx` workbooks.
 The current implementation compiles worksheets into a typed spatial AST, evaluates them into an
 adapter-neutral render plan, and applies the completed plan to a new `.xlsx` workbook through an
 `openpyxl` adapter. Direct cell formatting, formatted blanks, row and column dimensions, and merged
-ranges follow their source template cells. Supported template-authored worksheet charts retain
+ranges follow their planned presentation sources; fixed no-shift cells keep the formatting already
+authored at each destination. Supported template-authored worksheet charts retain
 their fixed cell references, size, and presentation, and embedded PNG/JPEG pictures retain their
 media and picture presentation. Editable static text boxes and other supported text-bearing shapes
 retain their authored text, rich formatting, and geometry. Validated cell-based anchors for all
@@ -19,10 +20,11 @@ B2: {{ row.amount }}{% endfor %}
 ```
 
 The two directive cells are opposite corners of one rectangular repeat body. Vertical growth
-inserts whole rows by default; `shift="cells"` isolates growth to the block's columns. Rectangular
-`if`/`else` blocks use the same spatial model. Explicit `{% region %}` / `{% endregion %}`
-rectangles measure several child layouts as one unit and control whether external growth moves
-complete rows or only the region's declared column band.
+inserts whole rows by default; `shift="cells"` isolates growth to the block's columns, while
+`shift="none"` fills fixed blank destinations without moving anything and preserves each
+destination's authored formatting. Rectangular `if`/`else` blocks use the same spatial model.
+Explicit `{% region %}` / `{% endregion %}` rectangles measure several child layouts as one unit
+and control whether external growth moves complete rows or only the region's declared column band.
 
 ## Current API
 

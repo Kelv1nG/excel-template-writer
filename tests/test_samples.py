@@ -13,6 +13,7 @@ SAMPLE_STEMS = (
     "repeated_blocks",
     "conditions_and_nesting",
     "cell_shift_lanes",
+    "fixed_layout_fill",
     "fixed_range_charts",
     "template_images",
     "template_text_shapes",

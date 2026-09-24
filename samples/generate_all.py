@@ -8,6 +8,7 @@ from pathlib import Path
 from samples import (
     cell_shift_lanes,
     conditions_and_nesting,
+    fixed_layout_fill,
     fixed_range_charts,
     missing_output_policies,
     regions,
@@ -51,6 +52,7 @@ def main() -> None:
             conditions_and_nesting.render_sample,
         ),
         _run_sample(cell_shift_lanes.build_template, cell_shift_lanes.render_sample),
+        _run_sample(fixed_layout_fill.build_template, fixed_layout_fill.render_sample),
         _run_sample(fixed_range_charts.build_template, fixed_range_charts.render_sample),
         _run_sample(template_images.build_template, template_images.render_sample),
         _run_sample(
