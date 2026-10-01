@@ -13,7 +13,7 @@ from xml.etree import ElementTree
 from zipfile import ZipFile
 
 from openpyxl import load_workbook
-from openpyxl.cell.cell import MergedCell
+from openpyxl.cell.cell import Cell, MergedCell
 from openpyxl.chart import AreaChart, BarChart, LineChart, PieChart, ScatterChart
 from openpyxl.chart.chartspace import ChartSpace
 from openpyxl.chart.reader import read_chart
@@ -536,6 +536,8 @@ def _dimension_presentation(dimension: Any) -> DimensionPresentation:
     """
 
     return DimensionPresentation(
+        # Read this before descriptors: accessing font/fill can create _style.
+        has_explicit_style=dimension._style is not None,
         hidden=bool(dimension.hidden),
         outline_level=int(dimension.outlineLevel or 0),
         collapsed=bool(dimension.collapsed),
@@ -657,14 +659,20 @@ def _cell_presentation(cell: Any) -> CellPresentation:
         Immutable presentation snapshot used by the workbook writer.
     """
 
+    style_source = cell
+    if cell._style is None:
+        # Synthetic/merged cells have no style array. Descriptor defaults use
+        # component zero, which need not be the workbook's actual default XF.
+        style_source = Cell(cell.parent)
+        style_source._style = copy(cell.parent.parent._cell_styles[0])
     return CellPresentation(
-        font=copy(cell.font),
-        fill=copy(cell.fill),
-        border=copy(cell.border),
-        alignment=copy(cell.alignment),
-        number_format=cell.number_format,
-        protection=copy(cell.protection),
-        quote_prefix=bool(getattr(cell, "quotePrefix", False)),
+        font=copy(style_source.font),
+        fill=copy(style_source.fill),
+        border=copy(style_source.border),
+        alignment=copy(style_source.alignment),
+        number_format=style_source.number_format,
+        protection=copy(style_source.protection),
+        quote_prefix=bool(style_source.quotePrefix),
         hyperlink=copy(getattr(cell, "hyperlink", None)),
         comment=copy(getattr(cell, "comment", None)),
         is_formula=getattr(cell, "data_type", None) == "f",
@@ -709,6 +717,8 @@ def _read_sheet(
                 cell.value is not None
                 or is_authored_empty_string
                 or cell.has_style
+                # Explicit no-fill overrides can have all-zero component IDs.
+                or (cell._style is not None and cell._style != sheet.parent._cell_styles[0])
                 or getattr(cell, "hyperlink", None) is not None
                 or getattr(cell, "comment", None) is not None
                 or coordinate in merge_coordinates
@@ -796,6 +806,7 @@ def read_workbook(path: str | Path) -> WorkbookSnapshot:
             chartsheets=tuple(sheet.title for sheet in workbook.chartsheets),
             properties=copy(workbook.properties),
             loaded_theme=workbook.loaded_theme,
+            default_cell_style=_cell_presentation(Cell(workbook.active)),
         )
     finally:
         workbook.close()

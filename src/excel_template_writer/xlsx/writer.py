@@ -16,6 +16,7 @@ from openpyxl.cell.cell import Cell
 from openpyxl.drawing.image import Image
 from openpyxl.drawing.spreadsheet_drawing import AbsoluteAnchor, OneCellAnchor, TwoCellAnchor
 from openpyxl.utils import get_column_letter
+from openpyxl.utils.indexed_list import IndexedList
 from openpyxl.worksheet.dimensions import ColumnDimension, RowDimension
 from openpyxl.worksheet.worksheet import Worksheet
 
@@ -56,6 +57,30 @@ ElementTree.register_namespace("a", _DRAWING_MAIN_NAMESPACE)
 ElementTree.register_namespace("r", _OFFICE_RELATIONSHIP_NAMESPACE)
 
 
+def _preserve_explicit_zero_style(destination: Cell | RowDimension | ColumnDimension) -> None:
+    """Keep explicit baseline formatting distinct from a customized default XF.
+
+    Openpyxl omits cell styles whose component IDs are all zero, even if that
+    means losing a no-fill override of the workbook default. A hidden equivalent
+    base style supplies a nonzero XF identity without altering direct formatting.
+
+    Args:
+        destination: Output cell or dimension with fully applied direct formatting.
+    """
+
+    workbook = destination.parent.parent
+    if destination.has_style or destination._style == workbook._cell_styles[0]:
+        return
+    name = "_ExplicitBaseline"
+    if name not in workbook.style_names:
+        baseline = copy(workbook._named_styles[0])
+        baseline.name = name
+        baseline.builtinId = None
+        baseline.hidden = True
+        workbook.add_named_style(baseline)
+    destination._style = copy(workbook._named_styles[name].as_tuple())
+
+
 class _PreservedImage(Image):
     def __init__(self, data: bytes, image_format: str, anchor: Any) -> None:
         """Create an openpyxl-compatible image without decoding its media bytes.
@@ -87,12 +112,18 @@ def _apply_dimension_style(
         source: Detached source dimension presentation.
     """
 
+    if not source.has_explicit_style:
+        # Dimension serialization asks for style_id even without formatting.
+        # Seed the actual default so width/height alone cannot create overrides.
+        destination._style = copy(destination.parent.parent._cell_styles[0])
+        return
     destination.font = copy(source.font)
     destination.fill = copy(source.fill)
     destination.border = copy(source.border)
     destination.alignment = copy(source.alignment)
     destination.number_format = source.number_format
     destination.protection = copy(source.protection)
+    _preserve_explicit_zero_style(destination)
 
 
 def _apply_row(destination: RowDimension, source: RowPresentation) -> None:
@@ -148,6 +179,9 @@ def _apply_cell(
     if isinstance(value, str) and value.startswith("=") and not content_is_formula:
         destination.data_type = "s"
     if presentation is None:
+        # Set after the value: date assignment can infer a number format, but
+        # an unmaterialized fixed destination must use the template's default.
+        destination._style = copy(destination.parent.parent._cell_styles[0])
         return
     destination.font = copy(presentation.font)
     destination.fill = copy(presentation.fill)
@@ -158,6 +192,7 @@ def _apply_cell(
     destination.quotePrefix = presentation.quote_prefix
     destination.hyperlink = copy(presentation.hyperlink)
     destination.comment = copy(presentation.comment)
+    _preserve_explicit_zero_style(destination)
 
 
 def _is_identity_plan(source: SheetSnapshot, plan: RenderPlan) -> bool:
@@ -707,6 +742,11 @@ def write_workbook(
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     workbook = Workbook()
+    # Register default components in this workbook rather than copying source
+    # registry IDs. Rebuild the index before writing cells to avoid stale hashes.
+    default_cell = Cell(workbook.active)
+    _apply_cell(default_cell, snapshot.default_cell_style, None, content_is_formula=False)
+    workbook._cell_styles = IndexedList([copy(default_cell._style)])
     workbook.remove(workbook.active)
     workbook.properties = copy(snapshot.properties)
     workbook.loaded_theme = snapshot.loaded_theme

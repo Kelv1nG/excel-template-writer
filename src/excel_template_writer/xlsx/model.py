@@ -26,6 +26,7 @@ class CellPresentation:
 
 @dataclass(frozen=True)
 class DimensionPresentation:
+    has_explicit_style: bool
     hidden: bool
     outline_level: int
     collapsed: bool
@@ -142,3 +143,4 @@ class WorkbookSnapshot:
     chartsheets: tuple[str, ...]
     properties: Any
     loaded_theme: bytes | None
+    default_cell_style: CellPresentation
