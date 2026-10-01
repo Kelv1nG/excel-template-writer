@@ -7,10 +7,12 @@ its self-test are synchronized; subsequent workbook saves never take this lock.
 from __future__ import annotations
 
 import math
+from _thread import LockType
 from collections.abc import Callable
 from io import BytesIO
 from threading import Lock
 from types import FunctionType
+from typing import cast
 
 import openpyxl
 import openpyxl.cell._writer as cell_writer
@@ -22,6 +24,7 @@ _CERTIFIED_VERSION = "3.1.5"
 _OWNER = "excel_template_writer.xlsx.openpyxl_numeric_compat"
 _WRAPPER = "finite-builtin-float-repr-v1"
 _TARGET = "openpyxl.cell._writer.safe_string"
+_STATE_KEY = "_excel_template_writer_numeric_compat_state"
 
 
 class _OwnedNumericFormatter:
@@ -50,12 +53,49 @@ class _OwnedNumericFormatter:
         return self.original(value)
 
 
-# A module reload must not reset a process-lifetime failure or replace its lock.
-if "_lock" not in globals():
-    _lock = Lock()
-    _state = "UNINSTALLED"
-    _active_wrapper: _OwnedNumericFormatter | None = None
-    _failure: Diagnostic | None = None
+class _ProcessState:
+    """Share activation state through the hook's owner across module incarnations."""
+
+    owner = _OWNER
+    target = _TARGET
+
+    def __init__(self):
+        """Initialize one activation lock and its process-lifetime result."""
+        self.lock = Lock()
+        self.state = "UNINSTALLED"
+        self.active_wrapper: _OwnedNumericFormatter | None = None
+        self.failure: Diagnostic | None = None
+
+
+# The writer module outlives deletion/reimport of this compatibility module.
+# setdefault keeps one owner even if independent incarnations race to initialize.
+_process_state = cast(_ProcessState, vars(cell_writer).setdefault(_STATE_KEY, _ProcessState()))
+_owner_failure = Diagnostic(
+    DiagnosticCode.XLSX_OPENPYXL_COMPAT_FAILED,
+    "numeric formatter process-state owner is foreign or malformed",
+    SourceLocation("<workbook>", "A1"),
+)
+
+
+def _owned_process_state() -> bool:
+    """Reject foreign state without replacing it or changing the formatter hook."""
+    try:
+        owner_type = type(_process_state)
+        initializer = vars(owner_type).get("__init__")
+        return (
+            owner_type.__module__ == __name__
+            and owner_type.__name__ == _ProcessState.__name__
+            and isinstance(initializer, FunctionType)
+            and initializer.__code__ == _ProcessState.__init__.__code__
+            and _process_state.owner == _OWNER
+            and _process_state.target == _TARGET
+            and type(_process_state.lock) is LockType
+            and _process_state.state in {"UNINSTALLED", "INSTALLING", "INSTALLED", "FAILED"}
+            and (_process_state.failure is None or isinstance(_process_state.failure, Diagnostic))
+            and (_process_state.state != "FAILED" or _process_state.failure is not None)
+        )
+    except Exception:
+        return False
 
 
 def _owned_hook(hook: object) -> bool:
@@ -117,28 +157,31 @@ def _fail(code: DiagnosticCode, message: str) -> Diagnostic:
         code: Version or hook compatibility diagnostic category.
         message: Underlying check failure to retain on later calls.
     """
-    global _state, _failure
-    _failure = Diagnostic(code, message, SourceLocation("<workbook>", "A1"))
-    _state = "FAILED"
-    return _failure
+    _process_state.failure = Diagnostic(code, message, SourceLocation("<workbook>", "A1"))
+    _process_state.state = "FAILED"
+    return _process_state.failure
 
 
 def ensure_openpyxl_numeric_compatibility() -> Diagnostic | None:
     """Install the certified hook once, or return the process's sticky failure."""
-    global _state, _active_wrapper
-    if _state == "INSTALLED" and getattr(cell_writer, "safe_string", None) is _active_wrapper:
+    if not _owned_process_state():
+        return _owner_failure
+    if (
+        _process_state.state == "INSTALLED"
+        and getattr(cell_writer, "safe_string", None) is _process_state.active_wrapper
+    ):
         return None
-    with _lock:
-        if _state == "FAILED":
-            return _failure
-        if _state == "INSTALLED":
-            if getattr(cell_writer, "safe_string", None) is _active_wrapper:
+    with _process_state.lock:
+        if _process_state.state == "FAILED":
+            return _process_state.failure
+        if _process_state.state == "INSTALLED":
+            if getattr(cell_writer, "safe_string", None) is _process_state.active_wrapper:
                 return None
             return _fail(
                 DiagnosticCode.XLSX_OPENPYXL_COMPAT_FAILED,
                 "numeric formatter ownership check failed: active hook was replaced",
             )
-        _state = "INSTALLING"
+        _process_state.state = "INSTALLING"
         if openpyxl.__version__ != _CERTIFIED_VERSION:
             return _fail(
                 DiagnosticCode.XLSX_OPENPYXL_COMPAT_UNVERIFIED,
@@ -149,25 +192,25 @@ def ensure_openpyxl_numeric_compatibility() -> Diagnostic | None:
             _validate_writer_hooks()
             hook = getattr(cell_writer, "safe_string", None)
             if hook is stock_formatter:
-                _active_wrapper = _OwnedNumericFormatter(stock_formatter)
-                vars(cell_writer)["safe_string"] = _active_wrapper
+                _process_state.active_wrapper = _OwnedNumericFormatter(stock_formatter)
+                vars(cell_writer)["safe_string"] = _process_state.active_wrapper
             elif _owned_hook(hook):
-                _active_wrapper = hook
+                _process_state.active_wrapper = hook
             else:
                 raise RuntimeError("numeric formatter hook is missing, foreign, or malformed")
             phase = "numeric self-test"
             _run_self_test()
-            if cell_writer.safe_string is not _active_wrapper:
+            if cell_writer.safe_string is not _process_state.active_wrapper:
                 raise RuntimeError("numeric formatter ownership changed during self-test")
         except Exception as exc:
             if (
-                _active_wrapper is not None
-                and getattr(cell_writer, "safe_string", None) is _active_wrapper
+                _process_state.active_wrapper is not None
+                and getattr(cell_writer, "safe_string", None) is _process_state.active_wrapper
             ):
-                cell_writer.safe_string = _active_wrapper.original
+                cell_writer.safe_string = _process_state.active_wrapper.original
             return _fail(
                 DiagnosticCode.XLSX_OPENPYXL_COMPAT_FAILED,
                 f"OpenPyXL {phase} failed: {type(exc).__name__}: {exc}",
             )
-        _state = "INSTALLED"
+        _process_state.state = "INSTALLED"
         return None

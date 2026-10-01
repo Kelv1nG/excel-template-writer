@@ -296,6 +296,91 @@ def test_fresh_module_recognizes_an_owned_hook_from_previous_incarnation() -> No
     """)
 
 
+@pytest.mark.parametrize("failure_kind", ["version", "self_test"])
+def test_cached_failure_survives_a_fresh_module_incarnation(failure_kind) -> None:
+    _child(f"""
+        import importlib
+        import sys
+        import openpyxl
+        import openpyxl.cell._writer as writer
+        from excel_template_writer.xlsx import openpyxl_numeric_compat as compat
+        original = writer.safe_string
+        if {failure_kind!r} == 'version':
+            openpyxl.__version__ = 'unverified'
+        else:
+            def fail():
+                raise RuntimeError('deliberate self-test failure')
+            compat._run_self_test = fail
+        failure = compat.ensure_openpyxl_numeric_compatibility()
+        assert failure.code == {'"E3206"' if failure_kind == "version" else '"E3207"'}
+        openpyxl.__version__ = '3.1.5'
+        name = compat.__name__
+        del sys.modules[name]
+        fresh = importlib.import_module(name)
+        assert fresh is not compat
+        assert fresh.ensure_openpyxl_numeric_compatibility() is failure
+        assert compat.ensure_openpyxl_numeric_compatibility() is failure
+        assert writer.safe_string is original
+    """)
+
+
+def test_module_incarnations_share_one_activation_self_test() -> None:
+    _child("""
+        import importlib
+        import sys
+        from concurrent.futures import ThreadPoolExecutor
+        from threading import Barrier, Event
+        from excel_template_writer.xlsx import openpyxl_numeric_compat as compat
+        name = compat.__name__
+        del sys.modules[name]
+        fresh = importlib.import_module(name)
+        assert fresh is not compat
+        start = Barrier(3)
+        entered, release = Event(), Event()
+        calls = []
+        original = compat._run_self_test
+        def gated():
+            calls.append(1)
+            entered.set()
+            assert release.wait(10)
+            original()
+        compat._run_self_test = fresh._run_self_test = gated
+        def activate(module):
+            start.wait(10)
+            return module.ensure_openpyxl_numeric_compatibility()
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            futures = [pool.submit(activate, module) for module in (compat, fresh)]
+            start.wait(10)
+            assert entered.wait(10)
+            assert not any(future.done() for future in futures)
+            release.set()
+            assert [future.result(10) for future in futures] == [None, None]
+        assert calls == [1]
+    """)
+
+
+@pytest.mark.parametrize("owner_kind", ["foreign", "malformed"])
+def test_invalid_process_owner_fails_closed_without_replacement(owner_kind) -> None:
+    _child(f"""
+        import openpyxl.cell._writer as writer
+        if {owner_kind!r} == 'malformed':
+            from excel_template_writer.xlsx import openpyxl_numeric_compat as compat
+            foreign = writer._excel_template_writer_numeric_compat_state
+            del foreign.lock
+        else:
+            foreign = object()
+            writer._excel_template_writer_numeric_compat_state = foreign
+        original = writer.safe_string
+        from excel_template_writer.xlsx import openpyxl_numeric_compat as compat
+        failure = compat.ensure_openpyxl_numeric_compatibility()
+        assert failure.code == 'E3207'
+        assert str(failure.location) == '<workbook>!A1'
+        assert compat.ensure_openpyxl_numeric_compatibility() is failure
+        assert writer._excel_template_writer_numeric_compat_state is foreign
+        assert writer.safe_string is original
+    """)
+
+
 def test_real_self_test_rejects_a_broken_reader_and_restores_stock() -> None:
     _child("""
         import openpyxl
