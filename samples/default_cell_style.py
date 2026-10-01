@@ -157,6 +157,7 @@ def render_sample(
         assert template.sheetnames == output.sheetnames == ["Default cell style"]
         source, result = template.active, output.active
         assert source.sheet_view.showGridLines is result.sheet_view.showGridLines is True
+        assert source.sheet_view.zoomScale == result.sheet_view.zoomScale == 80
         assert not source.merged_cells and not result.merged_cells
         for row, text in TEXT_ROWS.items():
             assert source.cell(row, 1).value == result.cell(row, 1).value == text
