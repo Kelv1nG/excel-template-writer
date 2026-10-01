@@ -155,7 +155,7 @@ The production sequence remains:
 3. compile, validate, evaluate, and plan every worksheet;
 4. plan workbook features for every worksheet;
 5. run adapter-local numeric preflight over every completed sheet plan;
-6. ensure the OpenPyXL compatibility layer is installed and healthy;
+6. ensure the OpenPyXL compatibility layer is active in memory and healthy;
 7. create, populate, serialize, verify, and atomically publish the destination workbook.
 
 No live destination workbook exists during numeric preflight. Any numeric diagnostic prevents the
@@ -183,8 +183,8 @@ behavior possible.
 The internal `write_workbook()` boundary invokes preflight and the compatibility guard before it
 constructs an OpenPyXL `Workbook`. The public `render_workbook()` therefore cannot bypass them, and
 an internal caller of the writer receives the same fail-closed behavior. Input loading occurs
-earlier because it does not serialize cells; deferring process-global installation until the write
-boundary avoids changing process state for a template that fails compilation or layout.
+earlier because it does not serialize cells; deferring process-global in-memory activation until
+the write boundary avoids changing process state for a template that fails compilation or layout.
 
 ### OpenPyXL compatibility module
 
@@ -203,12 +203,14 @@ return original_safe_string(value)
 The exact-type check is intentional. It prevents Decimal, NumPy scalars, booleans, or arbitrary
 numeric-looking objects from receiving an invalid repr token.
 
-Installation verifies all of the following before normal workbook serialization:
+In-memory activation neither installs a package nor edits OpenPyXL files on disk. Dependency
+installation remains managed by uv. Activation verifies all of the following before normal
+workbook serialization:
 
 - the installed distribution version is exactly 3.1.5 and is in the local allowlist;
 - the expected private module and hook exist;
-- before first installation, the hook is the expected stock OpenPyXL formatter;
-- an already-installed wrapper carries this project's ownership/version marker and points to the
+- before first activation, the hook is the expected stock OpenPyXL formatter;
+- an already-active wrapper carries this project's ownership/version marker and points to the
   captured original formatter; and
 - an in-memory save-and-reopen self-test preserves the float.hex() value of
   100000.00000000001.
@@ -218,19 +220,21 @@ formatter.
 
 ### Lifetime, ownership, and concurrency
 
-Installation is guarded by one module lock and a process-lifetime state machine:
+In-memory activation is guarded by one module lock and a process-lifetime state machine:
 
 ```text
 UNINSTALLED -> INSTALLING -> INSTALLED
                           -> FAILED
 ```
 
+These internal state labels refer only to in-memory hook activation, not package installation.
+
 Concurrent callers wait during INSTALLING. INSTALLED calls cheaply verify that the active hook is
 still the owned wrapper. If another library replaces it, the state becomes sticky FAILED. A failed
 self-test restores the captured original only when the hook still points to this project's wrapper,
 then records the failure. Later calls return the cached diagnostic instead of retrying silently.
 
-The wrapper is never installed and removed around an individual save. Toggling a process-global
+The wrapper is never activated and removed around an individual save. Toggling a process-global
 hook per save would create a race. Separate render requests must still use separate OpenPyXL
 Workbook instances and distinct output paths; this design does not make a shared Workbook
 thread-safe.
@@ -241,8 +245,9 @@ must isolate one writer in another process or adopt the OOXML-rewrite alternativ
 
 ### Version pin and upgrade rule
 
-pyproject.toml changes from the current compatible range to openpyxl==3.1.5, and uv.lock is updated
-with uv. The version allowlist and dependency pin must change together.
+The direct dependency is pinned exactly to `openpyxl==3.1.5`; the compatibility allowlist contains
+exactly `3.1.5`. The dependency pin, `uv.lock`, and allowlist must change together, with dependency
+installation and lock updates managed by uv.
 
 An OpenPyXL upgrade requires inspection of its numeric cell-writing path plus the full numeric
 fidelity suite. The maintainer must then certify the new hook, adapt the shim, or remove the shim if
@@ -251,9 +256,10 @@ without that review.
 
 ### Atomic output behavior
 
-Decimal policy failures occur before writer mutation. Compatibility installation and its self-test
-use an in-memory workbook before the destination writer is entered. Failures during the later save
-continue to use the existing temporary-file, package-verification, reopen, and atomic-replace path.
+Decimal policy failures occur before writer mutation. Compatibility in-memory activation and its
+self-test use an in-memory workbook before the destination writer is entered. Failures during the
+later save continue to use the existing temporary-file, package-verification, reopen, and
+atomic-replace path.
 
 Thus every numeric or compatibility error has the same publication rule: no partial workbook is
 returned, an absent destination is not created, and an existing destination is not replaced.
@@ -268,7 +274,7 @@ Add these stable codes in the existing E32xx XLSX-operation family:
 | E3204 | XLSX_DECIMAL_OUT_OF_RANGE | Rendered Sheet!cell | Conversion overflows, underflows, or would produce a nonzero binary64 subnormal. |
 | E3205 | XLSX_DECIMAL_INEXACT | Rendered Sheet!cell | The round-trip-safe binary64 token is not numerically equal to the Decimal amount. |
 | E3206 | XLSX_OPENPYXL_COMPAT_UNVERIFIED | <workbook>!A1 | Installed OpenPyXL version is not certified. |
-| E3207 | XLSX_OPENPYXL_COMPAT_FAILED | <workbook>!A1 | The expected hook, ownership check, installation, or behavioral self-test failed. |
+| E3207 | XLSX_OPENPYXL_COMPAT_FAILED | <workbook>!A1 | The expected hook, ownership check, in-memory activation, or behavioral self-test failed. |
 
 Finite Decimal policy errors are TemplateRenderError diagnostics because they concern planned
 output values, not template syntax. Messages include the rejected value category without embedding
@@ -279,7 +285,7 @@ Existing E1505 NON_FINITE_CONTEXT_NUMBER and E1307 NON_FINITE_EXPRESSION_NUMBER 
 for non-finite values. No duplicate XLSX diagnostic is added for an error already rejected by the
 core.
 
-E3207 intentionally combines private-hook shape, hook ownership/conflict, installation, and
+E3207 intentionally combines private-hook shape, hook ownership/conflict, in-memory activation, and
 self-test failures because they have the same caller action: stop output and repair or recertify
 the pinned integration. Its stable message identifies the failed check. E3206 remains separate so
 an uncertified dependency upgrade is immediately distinguishable.
@@ -350,12 +356,12 @@ Focused tests prove:
 - the stock OpenPyXL 3.1.5 formatter loses the documented regression value;
 - the wrapper emits a token that parses to the same binary64 value;
 - non-float and non-finite inputs delegate to the captured original formatter;
-- installation is idempotent and never wraps the wrapper again;
-- version, missing-hook, foreign-hook, post-install replacement, and self-test failures fail closed;
-- FAILED is sticky and concurrent ensure calls observe one installation result;
+- in-memory activation is idempotent and never wraps the wrapper again;
+- version, missing-hook, foreign-hook, post-activation replacement, and self-test failures fail closed;
+- FAILED is sticky and concurrent ensure calls observe one activation result;
 - the successful in-memory self-test uses OpenPyXL primitives without recursively entering the
   production render API; and
-- two independent workbooks can save concurrently after successful installation.
+- two independent workbooks can save concurrently after successful activation.
 
 Direct compatibility tests exercise both OpenPyXL cell-writer implementations when available and
 a raw write-only workbook after an explicit ensure call. That is hook coverage only; it does not

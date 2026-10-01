@@ -339,6 +339,10 @@ NaN, positive infinity, and negative infinity are not canonical numeric values. 
 datetime and time values must be converted under a platform policy before rendering because XLSX
 does not retain their timezone semantics.
 
+Every finite `Decimal` remains a canonical scalar regardless of its precision, exponent, or scale.
+The narrower numeric-cell policy in section 15.9 applies only at the XLSX output boundary; it does
+not restrict unused values or Decimal values deliberately rendered as text.
+
 ### 9.2 Records and ordered collections
 
 A record is a mapping whose keys are strings and whose values are canonical values. Property syntax
@@ -457,6 +461,11 @@ particular template, before evaluation begins.
   filter that produces a scalar.
 - A `for` expression requires an ordered collection; it does not iterate record keys.
 - The core language has no sorting operation in the first release. The platform prepares final order.
+
+The pure render plan retains canonical values, including `Decimal`, without workbook-specific
+conversion. The XLSX adapter converts supported Decimal numeric cells only after all worksheet
+plans are complete, according to section 15.9. Authored `number_format` controls presentation,
+including displayed trailing zeros, independently of stored numeric equality.
 
 ### 9.7 Missing values
 
@@ -1026,9 +1035,85 @@ Applies a validated render plan to a copy or newly constructed workbook model, t
 
 The writer performs no expression parsing and makes no layout decisions.
 
+All worksheet render plans and workbook-feature plans must finish before adapter-local numeric
+preflight. Preflight examines every final numeric cell in stable workbook, worksheet, row, and
+column order, including every repeated occurrence. It returns adapter-local copies with supported
+Decimal values converted to built-in floats, or all independently discoverable numeric diagnostics
+with no adapted plans. The original layout IR remains immutable and retains its Decimal values.
+Numeric preflight and the compatibility guard run at the internal writer boundary before creating
+or mutating the destination `openpyxl.Workbook`; public and internal writer callers cannot bypass
+them.
+
+#### Finite built-in float numeric cells
+
+For every final planned numeric cell whose value has exact built-in type `float` and is finite,
+the writer emits a numeric XML cell using the round-trip-safe token `repr(value)`. Reopening the
+serialized workbook with the pinned OpenPyXL reader must produce exact built-in type `float` and
+identical `float.hex()`. This includes integer-valued floats such as `1.0`, both signs of zero,
+binary64 subnormals, `sys.float_info.min`, and `sys.float_info.max`. The token is serialized as
+numeric XML, never assigned as a string cell value. Float subclasses retain existing best-effort
+behavior and are outside this guarantee.
+
+This is a pinned-library save-and-reopen guarantee. It does not promise preservation after desktop
+Excel opens, edits, recalculates, or resaves a workbook. Existing canonical and expression
+validation rejects non-finite values before XLSX preflight.
+
+#### Decimal numeric cells
+
+A planned Decimal numeric cell is supported exactly when all five predicates hold:
+
+1. The Decimal is finite; existing canonical and expression validation handles this predicate.
+2. Its mathematical precision is at most 15 significant digits.
+3. `float(value)` produces a finite binary64 value.
+4. The Decimal is zero, or the converted magnitude is at least `sys.float_info.min`. Nonzero
+   values that become subnormal or underflow to zero are unsupported.
+5. `Decimal(repr(converted))` compares numerically equal to the original Decimal.
+
+Mathematical precision counts `Decimal.as_tuple().digits` after stripping coefficient trailing
+zeros; zero has precision one. Thus `12.5`, `12.50`, `12.5000`, and `1.25E+1` have the same
+three-digit precision. Do not use `Decimal.normalize()` for this calculation because it depends on
+the active decimal context. Validation order is non-finite validation, precision, range
+(predicates 3 and 4), then decimal-token equality. A value failing multiple predicates receives
+the first diagnostic in this order.
+
+Accepted Decimal numeric cells become built-in floats at the XLSX boundary and use the same
+round-trip-safe serializer. Their numeric XML token represents the original decimal amount;
+this does not assert exact finite binary representation of amounts such as `0.1`. Reopening
+produces a float and loses Decimal type, exponent, scale, and signed-zero identity. Unsupported
+values are rejected, never implicitly rounded, stringified, or converted to text. Callers must
+apply any business rounding policy before rendering.
+
+Integers and temporal values receive no new public fidelity guarantee. Integers retain the stock
+OpenPyXL formatter. Temporal values may become float serials inside OpenPyXL and use the corrected
+token, but their regression contract is the pinned OpenPyXL conversion for the workbook epoch or
+ISO-date path, rather than original-microsecond identity. Other existing scalar and formula
+behavior remains unchanged.
+
+#### Compatibility guard and publication
+
+The adapter owns a guarded, process-lifetime compatibility hook for OpenPyXL's numeric cell
+serializer. In-memory activation neither installs a package nor edits OpenPyXL files on disk. It
+verifies the exact certified version, private hook shape, stock or owned hook identity, and an
+in-memory save-and-reopen self-test before destination workbook creation. Activation is
+idempotent, synchronized across concurrent callers, and fail-closed; a failure is sticky and later
+calls report its cached reason. An active guard checks that another library has not replaced its
+owned hook. The process-global hook also affects unrelated OpenPyXL writers in that process;
+concurrent renders require separate workbook instances and distinct output paths.
+
+Numeric or compatibility failures prevent publication: an absent destination remains absent and
+a pre-existing destination remains byte-for-byte unchanged. Later serialization failures use the
+temporary-output, package-verification, reopen, and atomic-replace path. Only a verified complete
+workbook may replace the destination. This contract supports `.xlsx` only and introduces no public
+write-only rendering API.
+
 ### 15.10 Output verification
 
-After serialization, the engine should reopen the output with `openpyxl` as a basic package-integrity check. Test environments should also open representative fixtures in Excel or LibreOffice, but LibreOffice is not required at runtime.
+After serialization, the engine reopens the temporary output with `openpyxl` as a basic
+package-integrity check before atomic publication. This runtime check is not an exhaustive
+per-cell numeric re-audit. Numeric fidelity is established by complete preflight, the verified
+serializer guard, and the focused and property tests in section 19. Portable tests use a frozen
+desktop-Excel reference; optional live Excel or LibreOffice checks do not become runtime
+dependencies or default acceptance gates.
 
 ## 16. Diagnostics
 
@@ -1063,6 +1148,24 @@ Examples:
 - `E1402 OVERLAPPING_ROW_SHIFTS`
 - `E2104 MERGE_CROSSES_BLOCK_BOUNDARY`
 - `E3101 FORMULA_REQUIRES_UNSUPPORTED_TRANSFORM`
+
+The XLSX numeric-output boundary reserves these stable render-error diagnostics:
+
+| Code | Name | Location | Meaning |
+| --- | --- | --- | --- |
+| E3203 | XLSX_DECIMAL_PRECISION_EXCEEDED | Rendered worksheet and cell | Mathematical precision exceeds 15 digits. |
+| E3204 | XLSX_DECIMAL_OUT_OF_RANGE | Rendered worksheet and cell | Conversion overflows, underflows, or would produce a nonzero binary64 subnormal. |
+| E3205 | XLSX_DECIMAL_INEXACT | Rendered worksheet and cell | The round-trip-safe binary64 token is not numerically equal to the Decimal amount. |
+| E3206 | XLSX_OPENPYXL_COMPAT_UNVERIFIED | `<workbook>!A1` | Installed OpenPyXL version is not certified. |
+| E3207 | XLSX_OPENPYXL_COMPAT_FAILED | `<workbook>!A1` | The expected hook, ownership check, in-memory activation, or behavioral self-test failed. |
+
+Decimal errors are `TemplateRenderError` diagnostics located at every affected rendered
+destination, including repeated cells. Their messages identify the rejected value category
+without unstable object representations. Compatibility errors cache their underlying reason;
+E3207 identifies the failed check, while E3206 distinguishes an uncertified dependency version.
+Existing `E1505 NON_FINITE_CONTEXT_NUMBER` and `E1307 NON_FINITE_EXPRESSION_NUMBER` remain
+authoritative for non-finite values, with no duplicate XLSX error. Every E3203-E3207 error prevents
+publication under section 15.9's absent-or-unchanged destination rule.
 
 `E1401` covers both competing planned allocations and an occupied `shift="none"` destination; the
 diagnostic location is the obstructing destination cell. `E2104` also covers a no-shift footprint
@@ -1191,6 +1294,30 @@ save/reload.
 
 Where workbook XML affects correctness, tests may inspect selected OOXML parts. XML manipulation is not the primary render strategy.
 
+Numeric tests inspect selected numeric XML tokens and reopen production output. Finite built-in
+floats must retain exact type and `float.hex()`, including signed zero, integer-valued floats,
+subnormals, finite extremes, and formatter regressions. Decimal tests cover every mathematical
+precision from 1 through 15, signs, scales, coefficient trailing zeros, normal-range boundaries,
+and arithmetic-produced values; 16-digit, overflow, underflow, subnormal, and token-inequality
+cases prove rejection and diagnostic precedence. Accepted cells retain numeric XML semantics and
+authored number formats; rejected repeated cells report all destination locations and leave
+absent or pre-existing outputs unchanged. Integer and temporal regression checks add no public
+fidelity guarantee.
+
+Portable CI includes a narrow immutable `.xlsx` reference created, fully recalculated, and saved
+by desktop Excel. Its manifest records Excel version/build, locale, calculation settings,
+disabled Precision as displayed, creation date, checksum, authoritative cells, comparison modes,
+and regeneration steps. Tests verify formula text, cached results, and selected raw XML caches
+without resaving the reference through OpenPyXL or comparing whole workbook bytes. The reference
+covers the 1-through-15-digit Decimal matrix and bounded shared operations with identical binary
+inputs and explicit evaluation order; cached results are a snapshot of that Excel build, not a
+universal formula oracle. Polars tests materialize operation result columns before rendering and
+verify produced dtype/scalar, canonical adapter value, numeric XML, and reopened value/type.
+Generic arithmetic equivalence, reductions, reassociation, and Excel resave fidelity are not
+claimed. Optional live Excel/COM testing uses a temporary copy, runs serially, and records the
+Excel build; it is outside the default acceptance gate and adds no licensed-Excel or `pywin32`
+dependency.
+
 ### 19.4 Property and fuzz tests
 
 - parser never crashes on arbitrary cell strings
@@ -1198,6 +1325,12 @@ Where workbook XML affects correctness, tests may inspect selected OOXML parts. 
 - coordinate transformations preserve ordering
 - render output respects configured size limits
 - load/save/reload succeeds for supported fixture workbooks
+- bounded Hypothesis examples of finite raw binary64 patterns preserve formatter and reopened bits
+- bounded Decimal tuples with 1-20 coefficient digits, boundary exponents, signs, and appended zeros
+  agree with an independent expression of the five numeric-cell predicates
+
+Deterministic numeric boundary matrices remain authoritative; generated examples supplement them.
+Use approximately 1,000-2,000 pure float-formatter examples and smaller XLSX I/O batches.
 
 ## 20. Proposed implementation phases
 
@@ -1258,6 +1391,13 @@ Vertical isolation regions use the explicit opposite-corner syntax and completed
 `openpyxl` is the proposed adapter because the engine must load and modify an existing `.xlsx` workbook. XlsxWriter is a write-only generator and cannot use an existing workbook as a template.
 
 `openpyxl` does not calculate formulas and does not preserve every possible OOXML object. The supported workbook-feature profile must therefore be explicit. Features outside that profile should be rejected or warned about during validation rather than silently promised.
+
+The direct dependency is pinned exactly to `openpyxl==3.1.5`; the compatibility allowlist contains
+exactly `3.1.5`. The dependency pin, `uv.lock`, and allowlist must change together. An upgrade
+requires inspecting the numeric cell-writing path and running the full numeric-fidelity suite,
+then certifying and adapting the hook or removing it if upstream serialization is round-trip safe.
+Never widen the dependency range without that certification. Package installation is managed by
+uv; runtime in-memory activation does not install packages or change library files on disk.
 
 References:
 
