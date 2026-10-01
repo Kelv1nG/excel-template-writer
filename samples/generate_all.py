@@ -8,6 +8,7 @@ from pathlib import Path
 from samples import (
     cell_shift_lanes,
     conditions_and_nesting,
+    default_cell_style,
     fixed_layout_fill,
     fixed_range_charts,
     missing_output_policies,
@@ -47,6 +48,7 @@ def main() -> None:
             missing_output_policies.render_sample,
         ),
         _run_sample(repeated_blocks.build_template, repeated_blocks.render_sample),
+        _run_sample(default_cell_style.build_template, default_cell_style.render_sample),
         _run_sample(
             conditions_and_nesting.build_template,
             conditions_and_nesting.render_sample,

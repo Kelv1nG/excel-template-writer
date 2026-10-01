@@ -95,8 +95,12 @@ assert its stable diagnostic code and either its source location or canonical co
   bytes.
 - For any change that removes directive text, repeats cells, or shifts layout, assert direct fill
   and border properties after save/reload at representative rendered, directive-only, formatted
-  blank, shifted, and unaffected cells. Value-only assertions do not prove presentation
-  preservation and can miss cells that silently revert to Excel's default appearance.
+  blank, shifted, and unaffected cells. Also verify the effective workbook default style for
+  absent blank cells, including row/column overrides, and retain explicit no-fill overrides
+  alongside directly filled controls. Value-only assertions do not prove presentation
+  preservation and can miss cells that silently revert to Excel's default appearance. Inspect
+  the saved default style and cell records in OOXML when synthesized blank cells in the public
+  workbook model cannot prove the effective appearance.
 - Inspect OOXML parts only when the public workbook model cannot prove the behavior.
 
 ## Maintained user samples
