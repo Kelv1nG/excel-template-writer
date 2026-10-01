@@ -478,6 +478,47 @@ def test_render_workbook_normalizes_adapter_values_once_for_all_sheets(
         rendered.close()
 
 
+def test_render_workbook_preserves_worksheet_zoom_configuration(tmp_path: Path) -> None:
+    template_path = tmp_path / "zoom-template.xlsx"
+    output_path = tmp_path / "zoom-output.xlsx"
+    workbook = Workbook()
+    normal = workbook.active
+    normal.title = "Normal"
+    normal.sheet_view.view = "normal"
+    normal.sheet_view.zoomScale = 80
+    normal.sheet_view.zoomScaleNormal = 90
+    page_layout = workbook.create_sheet("Page layout")
+    page_layout.sheet_view.view = "pageLayout"
+    page_layout.sheet_view.zoomScale = 75
+    page_layout.sheet_view.zoomScaleNormal = 95
+    page_layout.sheet_view.zoomScaleSheetLayoutView = 65
+    page_layout.sheet_view.zoomScalePageLayoutView = 70
+    workbook.create_sheet("Default")
+    _save(workbook, template_path)
+    workbook.close()
+
+    render_workbook(template_path, output_path, {})
+
+    rendered = load_workbook(output_path)
+    try:
+        assert {
+            sheet.title: (
+                sheet.sheet_view.view,
+                sheet.sheet_view.zoomScale,
+                sheet.sheet_view.zoomScaleNormal,
+                sheet.sheet_view.zoomScaleSheetLayoutView,
+                sheet.sheet_view.zoomScalePageLayoutView,
+            )
+            for sheet in rendered.worksheets
+        } == {
+            "Normal": ("normal", 80, 90, None, None),
+            "Page layout": ("pageLayout", 75, 95, 65, 70),
+            "Default": (None, None, None, None, None),
+        }
+    finally:
+        rendered.close()
+
+
 @pytest.mark.parametrize(
     ("missing_output", "expected_sole", "expected_mixed"),
     [

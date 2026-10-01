@@ -648,6 +648,11 @@ def _write_sheet(
     """
 
     destination.sheet_view.showGridLines = source.show_grid_lines
+    destination.sheet_view.view = source.sheet_view_mode
+    destination.sheet_view.zoomScale = source.zoom_scale
+    destination.sheet_view.zoomScaleNormal = source.zoom_scale_normal
+    destination.sheet_view.zoomScaleSheetLayoutView = source.zoom_scale_sheet_layout_view
+    destination.sheet_view.zoomScalePageLayoutView = source.zoom_scale_page_layout_view
     destination.freeze_panes = source.freeze_panes
     destination.sheet_properties.tabColor = copy(source.tab_color)
     destination.sheet_format.defaultRowHeight = source.default_row_height

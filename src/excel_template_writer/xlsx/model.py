@@ -107,6 +107,11 @@ class SheetSnapshot:
     columns: Mapping[int, ColumnPresentation]
     freeze_panes: str | None
     show_grid_lines: bool | None
+    sheet_view_mode: str | None
+    zoom_scale: int | None
+    zoom_scale_normal: int | None
+    zoom_scale_sheet_layout_view: int | None
+    zoom_scale_page_layout_view: int | None
     tab_color: Any | None
     default_row_height: float | None
     default_column_width: float | None

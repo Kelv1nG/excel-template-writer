@@ -881,6 +881,17 @@ cell-linked text, macros, shape hyperlinks, image-filled shapes, linked or exter
 SmartArt, form controls, OLE objects, and legacy VML drawings are outside this profile and cause
 explicit rejection rather than partial preservation.
 
+### 13.8 Worksheet view and zoom
+
+Each ordinary worksheet preserves its authored view mode and zoom configuration independently.
+The supported zoom metadata consists of the current zoom scale plus the remembered normal,
+page-layout, and page-break-preview scales. An unset scale remains unset so the spreadsheet
+consumer may apply its default.
+
+This is a narrow metadata profile rather than wholesale worksheet-view copying. It does not imply
+preservation of selections, active-cell state, scroll position, or other coordinate-dependent
+view state. Gridline visibility and freeze panes remain separately supported worksheet metadata.
+
 ## 14. Conditions and advanced constructs
 
 Conditions are required in the first usable language release and are represented in the AST from the beginning.
