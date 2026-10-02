@@ -38,13 +38,19 @@ flowchart LR
     Data --> Renderer["AST evaluator and layout planner"]
     AST --> Renderer
     Renderer --> Plan["RenderPlan"]
-    Plan --> Writer["Workbook writer / adapter"]
-    XLSX --> Writer
+    Plan --> Features["Complete workbook-feature plans"]
+    Features --> Numeric["Numeric preflight / adapter copies"]
+    Numeric --> Guard["Numeric serializer activation / guard"]
+    Guard --> Writer["Workbook writer / adapter"]
+    Reader --> Features
     Writer --> Output["New rendered .xlsx"]
 
     Compile -. "errors" .-> Diagnostics["Structured diagnostics"]
     Normalizer -. "errors" .-> Diagnostics
     Renderer -. "errors / warnings" .-> Diagnostics
+    Features -. "errors" .-> Diagnostics
+    Numeric -. "errors" .-> Diagnostics
+    Guard -. "errors" .-> Diagnostics
 ```
 
 The important dependency direction is left to right. `openpyxl` belongs at the reader/writer edges. The lexer, parsers, AST, compiler, evaluator, and layout planner do not import it.
@@ -463,13 +469,34 @@ The production workbook path is:
 openpyxl workbook
     → immutable workbook model
     → compile and validate
-    → render plan
-    → mutate a separate workbook copy
+    → pure render plans and complete workbook-feature plans
+    → numeric preflight into adapter-local plan copies
+    → numeric serializer activation and compatibility guard
+    → create and populate a separate workbook
     → save
     → reopen and verify
 ```
 
 The writer must consume the plan. It must not parse directives, evaluate expressions, or decide where rows belong. Its responsibilities are mechanical workbook operations such as writing typed values and applying planned transformations to styles, dimensions, merges, and supported metadata.
+
+[`xlsx/numeric.py`](../src/excel_template_writer/xlsx/numeric.py) checks every final numeric cell in
+stable worksheet/row/column order after all plans finish. It converts eligible Decimals only in
+adapter-local copies; the immutable pure IR retains its Decimal values. Rejected amounts produce
+all independently discoverable destination diagnostics before destination workbook or directory
+creation. Preprocessing and rounding remain caller responsibilities.
+
+[`xlsx/openpyxl_numeric_compat.py`](../src/excel_template_writer/xlsx/openpyxl_numeric_compat.py) certifies the pinned
+OpenPyXL version and activates a guarded in-memory numeric serializer that writes finite built-in
+floats using `repr(value)`. The version, hook shape and ownership, and a save/reopen self-test must
+pass before creating the destination workbook. Activation is synchronized and idempotent, failures
+are cached, and an active guard detects replacement of its owned hook. This process-global hook
+also affects other OpenPyXL writers in the same process; it edits no installed library files.
+
+Numeric and compatibility failures leave the destination absent or unchanged. Later writes use a
+temporary file, package checks, reopening, and atomic replacement. Runtime reopening is a basic
+package-integrity check, not an exhaustive per-cell numeric audit. Focused tests establish the
+pinned-library round-trip contract; a frozen desktop-Excel reference supplies bounded comparison
+evidence, not a guarantee about arbitrary arithmetic or Excel resaving output.
 
 The adapter is implemented in [`xlsx/`](../src/excel_template_writer/xlsx). It snapshots every
 material cell, including styled blanks; copies direct cell formatting from each planned

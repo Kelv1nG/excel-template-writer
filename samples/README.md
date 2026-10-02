@@ -25,7 +25,7 @@ When the optional dependency is absent, the generator prints one Polars skip mes
 
 | Python module | Generated workbooks | Current features demonstrated |
 | --- | --- | --- |
-| `samples.scalar_values` | `scalar_values_template.xlsx`, `scalar_values_output.xlsx` | Native scalar cells, mixed text, mapping access, native dates versus textual `date`, numeric `sum`/`min`/`max`, record and non-null `count`, basic arithmetic with precedence and unary signs, plus `upper`, `join`, and `default` filters |
+| `samples.scalar_values` | `scalar_values_template.xlsx`, `scalar_values_output.xlsx` | Native scalar cells, exact float round trips, supported 15-digit Decimal amounts and authored decimal display scale, mixed text, mapping access, native dates versus textual `date`, numeric `sum`/`min`/`max`, record and non-null `count`, basic arithmetic with precedence and unary signs, plus `upper`, `join`, and `default` filters |
 | `samples.missing_output_policies` | `missing_output_policies_template.xlsx`, `missing_output_policies_output.xlsx` | Strict `error`, tolerant `blank`, and exact-tag `preserve` handling for missing output values; `W1301` warnings, mixed text, `default` precedence, present nulls, and formatted blanks |
 | `samples.repeated_blocks` | `repeated_blocks_template.xlsx`, `repeated_blocks_output.xlsx` | One-cell lists, styled rectangular table rows, row shifting, formatted blanks, directive-only cell fill/border preservation, merged footers, and empty-repeat placeholders |
 | `samples.default_cell_style` | `default_cell_style_template.xlsx`, `default_cell_style_output.xlsx` | Workbook default white fill for absent blank cells, per-sheet 80% zoom preservation, static text above three expanding tables, direct white-fill and explicit no-fill controls, and directive-only fill/border preservation |
@@ -36,7 +36,7 @@ When the optional dependency is absent, the generator prints one Polars skip mes
 | `samples.template_images` | `template_images_template.xlsx`, `template_images_output.xlsx` | Embedded PNG byte preservation plus stationary and downward-moving pictures under whole-row and isolated cell-lane expansion |
 | `samples.template_text_shapes` | `template_text_shapes_template.xlsx`, `template_text_shapes_output.xlsx` | Editable styled text boxes, callouts, and arrows; literal tag-like shape text; and stationary or downward-moving shapes under whole-row and isolated cell-lane expansion |
 | `samples.regions` | `regions_template.xlsx`, `regions_output.xlsx` | Explicit vertical regions, `shift="cells"`, `shift="rows"`, tallest-lane measurement, reserved source height, exact column bands, and nested regions |
-| `samples.polars_dataframe` | `polars_dataframe_template.xlsx`, `polars_dataframe_output.xlsx` | Explicit eager-Polars adapter, row-order preservation, typed values, and null/NaN normalization |
+| `samples.polars_dataframe` | `polars_dataframe_template.xlsx`, `polars_dataframe_output.xlsx` | Explicit eager-Polars adapter, Decimal result column computed before rendering, numeric writeback with authored currency format, row-order preservation, typed values, and null/NaN normalization |
 
 Run one sample independently with, for example:
 
@@ -45,6 +45,19 @@ uv run python -m samples.regions
 uv run python -m samples.missing_output_policies
 uv run python -m samples.default_cell_style
 uv run --extra polars python -m samples.polars_dataframe
+```
+
+The scalar sample labels the formerly lossy float `100000.00000000001`, financial
+`Decimal("1234567890123.45")`, and `Decimal("12.50")` displayed with format `0.00`. The Polars sample
+computes `computed_amount = amount * Decimal("1.05")` in Polars, checks its Decimal dtype/scalar,
+and renders that result as a numeric cell. Both builders assert reopened amounts, types, and
+formats. The float guarantee concerns the pinned OpenPyXL round trip; it does not cover desktop
+Excel resaving the workbooks. Decimal scale is presentation, and business rounding belongs to the
+caller. Regenerate just these pairs with:
+
+```powershell
+uv run --all-extras python -m samples.scalar_values
+uv run --all-extras python -m samples.polars_dataframe
 ```
 
 The committed `missing_output_policies_output.xlsx` workbook uses `preserve` so unresolved tags and

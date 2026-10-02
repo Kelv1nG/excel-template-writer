@@ -152,6 +152,21 @@ render_workbook(
 
 All worksheets are compiled, planned, and validated before the output workbook is written. The
 input file is never overwritten, and the serialized output is reopened before it is published.
+
+Finite built-in `float` numeric cells use round-trip-safe numeric XML tokens. Saving and reopening
+with the pinned OpenPyXL reader preserves the exact `float` type and `float.hex()` bits, including
+`100000.00000000001`. This is a library round-trip guarantee; desktop Excel may change values when
+it opens, edits, recalculates, or resaves the workbook.
+
+`Decimal` numeric cells are eligible when finite, at most 15 significant digits after coefficient
+trailing zeros are removed, convertible to a finite binary64 value that is zero or normal, and
+`Decimal(repr(float(value))) == value`. Accepted amounts are written as numeric cells, never text;
+reopening returns floats and does not preserve Decimal scale or type. For example,
+`Decimal("1234567890123.45")` is supported, and `Decimal("12.50")` displays two decimals when the
+template cell has format `0.00`. Apply business rounding before rendering; unsupported numeric
+Decimals fail explicitly. See [numeric output guidance](docs/directives.md#numeric-output) and
+the [maintained scalar and Polars samples](samples/README.md).
+
 Recovered missing output tags produce nonfatal `W1301` warning diagnostics and do not prevent a
 plan or workbook from being returned successfully. The workbook entry point accepts the same
 `missing_output=MissingOutputPolicy.BLANK` (or `MissingOutputPolicy.PRESERVE`) argument shown for

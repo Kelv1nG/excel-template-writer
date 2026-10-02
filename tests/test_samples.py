@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from decimal import Decimal
 from pathlib import Path
+from xml.etree import ElementTree
+from zipfile import ZipFile
 
 import pytest
 from openpyxl import load_workbook
@@ -66,3 +69,56 @@ def test_sample_catalog_names_every_committed_pair() -> None:
     for stem in SAMPLE_STEMS:
         assert f"{stem}_template.xlsx" in catalog
         assert f"{stem}_output.xlsx" in catalog
+
+
+def test_scalar_values_sample_demonstrates_numeric_fidelity() -> None:
+    path = SAMPLES / "scalar_values_output.xlsx"
+    workbook = load_workbook(path)
+    try:
+        sheet = workbook["Scalar values"]
+        cases = {row[0].value: row[1] for row in sheet.iter_rows(min_row=5)}
+        float_cell = cases["Float bit fidelity"]
+        assert float_cell.data_type == "n" and type(float_cell.value) is float
+        assert float_cell.value.hex() == (100000.00000000001).hex()
+        assert float_cell.number_format == "0.00000000000"
+        with ZipFile(path) as archive:
+            root = ElementTree.fromstring(archive.read("xl/worksheets/sheet1.xml"))
+        xml_cells = {cell.attrib["r"]: cell for cell in root.findall(".//{*}c")}
+        for label, amount, number_format in (
+            ("Decimal", "1250.75", '$#,##0.00;[Red]-$#,##0.00;"-"'),
+            ("15-digit financial Decimal", "1234567890123.45", "#,##0.00"),
+            ("Decimal display scale", "12.50", "0.00"),
+        ):
+            cell = cases[label]
+            assert cell.data_type == "n" and type(cell.value) is float
+            assert Decimal(repr(cell.value)) == Decimal(amount)
+            assert cell.number_format == number_format
+            xml_cell = xml_cells[cell.coordinate]
+            assert xml_cell.get("t") == "n"
+            token = xml_cell.find("{*}v")
+            assert token is not None and token.text is not None
+            assert Decimal(token.text) == Decimal(amount)
+    finally:
+        workbook.close()
+
+
+def test_polars_sample_demonstrates_computed_numeric_writeback() -> None:
+    path = SAMPLES / "polars_dataframe_output.xlsx"
+    workbook = load_workbook(path)
+    try:
+        sheet = workbook["Polars DataFrame"]
+        columns = {cell.value: cell.column for cell in sheet[4]}
+        rows = {row[0].value: row[0].row for row in sheet.iter_rows(min_row=5)}
+        cell = sheet.cell(rows["Consulting"], columns["Computed amount"])
+        assert cell.data_type == "n" and type(cell.value) is float
+        assert Decimal(repr(cell.value)) == Decimal("1312.50")
+        assert cell.number_format == '$#,##0.00;[Red]-$#,##0.00;"-"'
+        with ZipFile(path) as archive:
+            root = ElementTree.fromstring(archive.read("xl/worksheets/sheet1.xml"))
+        xml_cell = root.find(f".//{{*}}c[@r='{cell.coordinate}']")
+        assert xml_cell is not None and xml_cell.get("t") == "n"
+        token = xml_cell.find("{*}v")
+        assert token is not None and token.text is not None
+        assert Decimal(token.text) == Decimal("1312.50")
+    finally:
+        workbook.close()

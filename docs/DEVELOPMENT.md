@@ -103,6 +103,31 @@ assert its stable diagnostic code and either its source location or canonical co
   workbook model cannot prove the effective appearance.
 - Inspect OOXML parts only when the public workbook model cannot prove the behavior.
 
+### Frozen desktop-Excel numeric reference
+
+`tests/fixtures/numeric_fidelity/excel_numeric_reference.xlsx` is an immutable reference created,
+fully recalculated, and saved by desktop Excel. Its adjacent JSON manifest records the Excel
+version/build, locale, UTC creation time, calculation settings (including disabled Precision as
+displayed), authoritative named cells, comparison modes, and SHA-256 checksum. See the
+[fixture maintenance instructions](../tests/fixtures/numeric_fidelity/README.md) and documented
+PowerShell COM builder; review the regenerated workbook and manifest together.
+
+Portable tests verify provenance/checksum, formula text with `data_only=False`, cached numeric
+results with `data_only=True`, and selected OOXML formula/cache nodes. Never resave the reference
+through OpenPyXL: it does not calculate formulas and saving can discard Excel-authored caches.
+Do not hand-edit its ZIP/XML. Regenerate it only with the documented desktop-Excel builder, outside
+default CI. When updating maintained samples, regenerate only affected sample modules; leave the
+frozen reference unchanged unless its maintenance is explicitly in scope.
+
+The reference covers 1–15-digit Decimal amounts and four single operations on identical exact
+binary-fraction inputs. It is evidence from the recorded Excel build, not a universal formula
+oracle or a promise of arbitrary Polars/Excel arithmetic parity or Excel resave fidelity. Default
+CI requires no live Excel or `pywin32`; optional live checks use a temporary copy, run serially,
+and record the Excel build.
+
+If pytest's default temporary directory is inaccessible, pass a fresh workspace path such as
+`--basetemp .venv/pytest-numeric-20261002` to each pytest invocation.
+
 ## Maintained user samples
 
 `samples/` is the maintained, executable catalog of supported user-visible behavior. `scratch/`
