@@ -55,7 +55,21 @@ def _tokens(data: bytes) -> list[str]:
 
 
 def test_stock_openpyxl_loses_regression_float_bits() -> None:
-    assert _tokens(_save([100000.00000000001])) == ["100000"]
+    _child("""
+        from io import BytesIO
+        from xml.etree import ElementTree
+        from zipfile import ZipFile
+        import openpyxl
+        assert openpyxl.__version__ == '3.1.5'
+        workbook = openpyxl.Workbook()
+        workbook.active['A1'] = 100000.00000000001
+        stream = BytesIO()
+        workbook.save(stream)
+        workbook.close()
+        with ZipFile(BytesIO(stream.getvalue())) as package:
+            root = ElementTree.fromstring(package.read('xl/worksheets/sheet1.xml'))
+        assert [node.text for node in root.findall('.//{*}v')] == ['100000']
+    """)
 
 
 def test_wrapper_round_trips_fixed_and_generated_binary64_values() -> None:
