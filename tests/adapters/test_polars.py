@@ -345,3 +345,50 @@ def test_polars_exact_binary_fraction_operations_round_trip(
     render_workbook(template, output, {"rows": frame}, adapters=polars_adapters())
 
     _assert_result_output(output, [expected])
+
+
+@pytest.mark.parametrize(
+    ("left", "right", "operation", "coordinate", "formula"),
+    [
+        (0.5, 0.25, "add", "B19", "=0.5+0.25"),
+        (1.5, 0.25, "subtract", "B20", "=1.5-0.25"),
+        (1.125, 2.0, "multiply", "B21", "=1.125*2"),
+        (5.0, 2.0, "divide", "B22", "=5/2"),
+    ],
+)
+def test_polars_exact_binary_operations_match_frozen_excel_reference(
+    tmp_path: Path, left: float, right: float, operation: str, coordinate: str, formula: str
+) -> None:
+    reference_path = (
+        Path(__file__).parents[1] / "fixtures/numeric_fidelity/excel_numeric_reference.xlsx"
+    )
+    assert reference_path.is_file(), "Frozen desktop-Excel workbook is missing"
+    formulas = load_workbook(reference_path, data_only=False)
+    reference = load_workbook(reference_path, data_only=True)
+    try:
+        assert formulas["NumericReference"][coordinate].value == formula
+        expected = reference["NumericReference"][coordinate].value
+        assert type(expected) is float
+        expressions = {
+            "add": pl.col("left") + pl.col("right"),
+            "subtract": pl.col("left") - pl.col("right"),
+            "multiply": pl.col("left") * pl.col("right"),
+            "divide": pl.col("left") / pl.col("right"),
+        }
+        frame = pl.DataFrame({"left": [left], "right": [right]}).with_columns(
+            expressions[operation].alias("result")
+        )
+        assert frame.schema["result"] == pl.Float64
+        scalar = frame["result"][0]
+        assert type(scalar) is float and scalar.hex() == expected.hex()
+        adapted = _canonical_results(frame)[0]
+        assert type(adapted) is float and adapted.hex() == expected.hex()
+        template = _result_template(tmp_path / "template.xlsx")
+        output = tmp_path / "output.xlsx"
+
+        render_workbook(template, output, {"rows": frame}, adapters=polars_adapters())
+
+        _assert_result_output(output, [expected])
+    finally:
+        formulas.close()
+        reference.close()
