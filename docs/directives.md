@@ -146,15 +146,21 @@ while the authored number format `0.00` displays `12.50`. Formatting does not ro
 value. Mixed content such as `Amount: {{ invoice.amount }}` deliberately produces text.
 
 Finite built-in floats retain their exact type and bits when renderer output is reopened with the
-pinned OpenPyXL reader. This does not guarantee preservation after desktop Excel opens, edits,
-recalculates, or resaves the file, and adds no fidelity guarantee for integers or dates.
+pinned OpenPyXL reader and the authored number format is not interpreted as a date, time, or
+duration. The numeric XML token preserves the binary64 value regardless of format. Authored
+formats remain preserved; recognized temporal formats may reopen as temporal Python values or
+`#VALUE!` for out-of-range serials. This is reader interpretation, not token loss, and adds no
+temporal fidelity guarantee. Preservation after desktop Excel opens, edits, recalculates, or
+resaves the file is not guaranteed, and integers receive no new fidelity guarantee.
 
 Decimal numeric output requires a finite amount with at most 15 significant digits, counting
 coefficient digits after removing trailing zeros (zero counts as one). Conversion to float must
 be finite, and a nonzero amount must be at least `sys.float_info.min` in magnitude after conversion.
 Finally, `Decimal(repr(float(value)))` must equal the original amount. Accepted values remain
-numeric in XML and reopen as floats; Decimal type, exponent, scale, and signed-zero identity are
-not retained. These rules apply to final numeric cells, including arithmetic results; unused
+numeric in XML with the original decimal amount and reopen as floats under the same
+non-temporal-format condition; recognized temporal formats have the same reader interpretation
+described above. Decimal type, exponent, scale, and signed-zero identity are not retained.
+These rules apply to final numeric cells, including arithmetic results; unused
 Decimals and Decimals deliberately rendered as text are not subject to this boundary.
 
 The renderer never implicitly rounds or converts an unsupported amount to text. Callers own

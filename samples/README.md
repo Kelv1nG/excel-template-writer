@@ -51,9 +51,12 @@ The scalar sample labels the formerly lossy float `100000.00000000001`, financia
 `Decimal("1234567890123.45")`, and `Decimal("12.50")` displayed with format `0.00`. The Polars sample
 computes `computed_amount = amount * Decimal("1.05")` in Polars, checks its Decimal dtype/scalar,
 and renders that result as a numeric cell. Both builders assert reopened amounts, types, and
-formats. The float guarantee concerns the pinned OpenPyXL round trip; it does not cover desktop
-Excel resaving the workbooks. Decimal scale is presentation, and business rounding belongs to the
-caller. Regenerate just these pairs with:
+formats. These numeric examples use non-temporal formats: the pinned OpenPyXL reopen-as-float
+guarantee requires formats that it does not interpret as dates, times, or durations. With temporal
+formats, exact numeric XML tokens and authored formats remain preserved, but the reader may return
+temporal Python values or `#VALUE!` for out-of-range serials; no new temporal fidelity is promised.
+The guarantee does not cover desktop Excel resaving the workbooks. Decimal scale is presentation,
+and business rounding belongs to the caller. Regenerate just these pairs with:
 
 ```powershell
 uv run --all-extras python -m samples.scalar_values

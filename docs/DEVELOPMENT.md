@@ -103,6 +103,14 @@ assert its stable diagnostic code and either its source location or canonical co
   workbook model cannot prove the effective appearance.
 - Inspect OOXML parts only when the public workbook model cannot prove the behavior.
 
+Numeric fidelity tests distinguish stored tokens from reader interpretation. Every finite built-in
+float token preserves binary64 bits, and every accepted Decimal token preserves its decimal amount.
+Reopen-as-float type/bit assertions require an effective authored format that pinned OpenPyXL does
+not interpret as a date, time, or duration. For recognized temporal formats, assert numeric XML
+and preserved formats independently from the returned temporal Python value or `#VALUE!` for an
+out-of-range serial; characterize existing behavior without adding a temporal fidelity guarantee.
+The pinned-library contract does not guarantee desktop Excel resave fidelity.
+
 ### Frozen desktop-Excel numeric reference
 
 `tests/fixtures/numeric_fidelity/excel_numeric_reference.xlsx` is an immutable reference created,

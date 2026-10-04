@@ -4,8 +4,9 @@
 > (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use
 > checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Preserve finite built-in floats bit-for-bit through XLSX save/reopen and write supported
-financial Decimals as numeric cells without silent rounding.
+**Goal:** Preserve finite built-in floats bit-for-bit in numeric XML and through pinned OpenPyXL
+reopen with non-temporal formats; write supported financial Decimals as numeric cells without
+silent rounding.
 
 **Architecture:** Keep the core render plan unchanged, then perform pure Decimal validation and
 adaptation at the XLSX writer boundary. Activate one version-checked, process-lifetime OpenPyXL
@@ -22,8 +23,12 @@ SpreadsheetML XML, and a frozen desktop-Excel reference workbook.
 - Update normative `SPEC.md` before changing runtime behavior.
 - Support `.xlsx` only; do not add `.xlsm` or public write-only rendering.
 - Pin `openpyxl==3.1.5` and keep the compatibility allowlist identical to that pin.
-- Preserve every finite value whose exact type is built-in `float` through the pinned OpenPyXL
-  save/reopen path, including signed zero, subnormals, and finite extremes.
+- Preserve every finite value whose exact type is built-in `float` in numeric XML, including signed
+  zero, subnormals, and finite extremes. Pinned OpenPyXL reopen-as-float type/bits require a format
+  that it does not interpret as a date, time, or duration.
+- Preserve authored formats for floats and accepted Decimals. Recognized temporal formats may
+  reopen as temporal Python values or `#VALUE!` for out-of-range serials; this existing reader
+  interpretation does not change the stored token or introduce a temporal fidelity guarantee.
 - Keep every finite Decimal canonical in the core; apply the 15-significant-digit policy only to
   final numeric planned cells.
 - Never round, stringify, or publish partial output for an unsupported Decimal.
@@ -69,14 +74,15 @@ SpreadsheetML XML, and a frozen desktop-Excel reference workbook.
 
 Document all of these exact decisions:
 
-- exact built-in finite floats use a round-trip-safe numeric XML token and reopen as `float` with
-  identical `float.hex()`;
+- exact built-in finite floats use a round-trip-safe numeric XML token for every format and reopen
+  as `float` with identical `float.hex()` when the reader does not interpret the format as temporal;
 - the guarantee is a pinned-library round trip, not desktop-Excel resave behavior;
 - Decimal numeric cells use the five predicates from the design, in precision/range/token-equality
   order;
 - mathematical precision strips coefficient trailing zeros without `Decimal.normalize()`;
 - accepted Decimal values become built-in floats and lose type, exponent, scale, and signed-zero
-  identity;
+  identity; their tokens preserve the original decimal amount, while reopen-as-float behavior has
+  the same non-temporal-format qualification;
 - integers and temporal values receive no new public fidelity guarantee;
 - all sheet plans finish before numeric preflight, which precedes workbook creation;
 - E3203-E3207 meanings, locations, and atomic publication behavior;
@@ -351,6 +357,9 @@ Add production-API tests for:
 - `test_supported_decimal_is_numeric_in_xml_and_preserves_number_format`: accepted matrices through
   15 digits, reopened float bits, and formatting;
 - `test_decimal_scale_variants_have_equal_amounts_and_authored_formats`;
+- float and accepted-Decimal date/duration-format cases that separately assert numeric token
+  fidelity, preserved formats, and pinned OpenPyXL temporal interpretation, plus an extreme float
+  date-format case that retains its exact token despite a reader warning and `#VALUE!`;
 - `test_decimal_policy_does_not_reject_unused_or_mixed_text_values`;
 - `test_decimal_preflight_runs_before_output_directory_creation`;
 - `test_decimal_preflight_preserves_existing_output_bytes`;
@@ -558,6 +567,10 @@ Add concise numeric-output guidance to:
 - `docs/explained.md`: pure render plan -> numeric preflight -> activation -> writer flow; and
 - `docs/DEVELOPMENT.md`: frozen Excel fixture provenance, checksum, cached-formula inspection, and
   no-OpenPyXL-resave rule.
+
+Qualify all float/accepted-Decimal reopen claims with the non-temporal-format condition. Describe
+universal stored-token fidelity and preserved authored formats separately from pinned OpenPyXL's
+existing temporal or out-of-range-error interpretation, with no new temporal fidelity guarantee.
 
 - [ ] **Step 5: Run focused checks**
 

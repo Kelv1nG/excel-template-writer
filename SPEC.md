@@ -1047,12 +1047,18 @@ them.
 #### Finite built-in float numeric cells
 
 For every final planned numeric cell whose value has exact built-in type `float` and is finite,
-the writer emits a numeric XML cell using the round-trip-safe token `repr(value)`. Reopening the
-serialized workbook with the pinned OpenPyXL reader must produce exact built-in type `float` and
-identical `float.hex()`. This includes integer-valued floats such as `1.0`, both signs of zero,
-binary64 subnormals, `sys.float_info.min`, and `sys.float_info.max`. The token is serialized as
-numeric XML, never assigned as a string cell value. Float subclasses retain existing best-effort
-behavior and are outside this guarantee.
+the writer emits a numeric XML cell using the round-trip-safe token `repr(value)`, preserving the
+binary64 value in the stored token. This includes integer-valued floats such as `1.0`, both signs
+of zero, binary64 subnormals, `sys.float_info.min`, and `sys.float_info.max`. The token is serialized
+as numeric XML, never assigned as a string cell value. Float subclasses retain existing
+best-effort behavior and are outside this guarantee.
+
+Reopening with the pinned OpenPyXL reader must produce exact built-in type `float` and identical
+`float.hex()` when the effective authored number format is not interpreted by that reader as a
+date, time, or duration. Authored formats remain preserved. For recognized temporal formats,
+OpenPyXL may return a temporal Python value (`date`, `time`, `datetime`, or `timedelta`), or
+`#VALUE!` for an out-of-range serial. This existing reader interpretation does not change the
+stored numeric token and receives no new temporal fidelity guarantee.
 
 This is a pinned-library save-and-reopen guarantee. It does not promise preservation after desktop
 Excel opens, edits, recalculates, or resaves a workbook. Existing canonical and expression
@@ -1079,9 +1085,11 @@ the first diagnostic in this order.
 Accepted Decimal numeric cells become built-in floats at the XLSX boundary and use the same
 round-trip-safe serializer. Their numeric XML token represents the original decimal amount;
 this does not assert exact finite binary representation of amounts such as `0.1`. Reopening
-produces a float and loses Decimal type, exponent, scale, and signed-zero identity. Unsupported
-values are rejected, never implicitly rounded, stringified, or converted to text. Callers must
-apply any business rounding policy before rendering.
+produces a float under the same non-temporal-format condition above; recognized temporal formats
+retain the same OpenPyXL interpretation, including possible `#VALUE!`, with no new temporal
+fidelity guarantee. Decimal type, exponent, scale, and signed-zero identity are not preserved.
+Unsupported values are rejected, never implicitly rounded, stringified, or converted to text.
+Callers must apply any business rounding policy before rendering.
 
 Integers and temporal values receive no new public fidelity guarantee. Integers retain the stock
 OpenPyXL formatter. Temporal values may become float serials inside OpenPyXL and use the corrected
@@ -1295,10 +1303,12 @@ save/reload.
 Where workbook XML affects correctness, tests may inspect selected OOXML parts. XML manipulation is not the primary render strategy.
 
 Numeric tests inspect selected numeric XML tokens and reopen production output. Finite built-in
-floats must retain exact type and `float.hex()`, including signed zero, integer-valued floats,
-subnormals, finite extremes, and formatter regressions. Decimal tests cover every mathematical
-precision from 1 through 15, signs, scales, coefficient trailing zeros, normal-range boundaries,
-and arithmetic-produced values; 16-digit, overflow, underflow, subnormal, and token-inequality
+floats must retain exact type and `float.hex()` with non-temporal number formats, including signed
+zero, integer-valued floats, subnormals, finite extremes, and formatter regressions. Temporal-format
+cases for floats and accepted Decimals assert token fidelity and authored formats independently
+from OpenPyXL's temporal or out-of-range-error interpretation. Decimal tests cover every
+mathematical precision from 1 through 15, signs, scales, coefficient trailing zeros, normal-range
+boundaries, and arithmetic-produced values; 16-digit, overflow, underflow, subnormal, and token-inequality
 cases prove rejection and diagnostic precedence. Accepted cells retain numeric XML semantics and
 authored number formats; rejected repeated cells report all destination locations and leave
 absent or pre-existing outputs unchanged. Integer and temporal regression checks add no public
@@ -1326,6 +1336,7 @@ dependency.
 - render output respects configured size limits
 - load/save/reload succeeds for supported fixture workbooks
 - bounded Hypothesis examples of finite raw binary64 patterns preserve formatter and reopened bits
+  with non-temporal number formats
 - bounded Decimal tuples with 1-20 coefficient digits, boundary exponents, signs, and appended zeros
   agree with an independent expression of the five numeric-cell predicates
 

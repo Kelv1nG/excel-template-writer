@@ -4,6 +4,7 @@ import math
 import struct
 import sys
 from collections.abc import Sequence
+from datetime import datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from xml.etree import ElementTree
@@ -103,6 +104,70 @@ def test_float_xml_tokens_use_repr_and_remain_numeric(tmp_path: Path) -> None:
     render_workbook(template, output, {"values": values})
 
     _assert_numeric_output(output, values)
+
+
+@pytest.mark.parametrize("value", (12.5, Decimal("12.50")), ids=("float", "decimal"))
+@pytest.mark.parametrize(
+    ("number_format", "interpreted"),
+    (
+        ("yyyy-mm-dd", datetime(1900, 1, 12, 12)),
+        ("[h]:mm:ss", timedelta(days=12, hours=12)),
+    ),
+    ids=("date", "duration"),
+)
+def test_temporal_number_formats_preserve_numeric_token_and_authored_format(
+    tmp_path: Path, value: float | Decimal, number_format: str, interpreted: datetime | timedelta
+) -> None:
+    template = _template(tmp_path / "template.xlsx", 1, (number_format,))
+    output = tmp_path / "output.xlsx"
+
+    render_workbook(template, output, {"values": [value]})
+
+    xml_cell = _xml_cells(output)["A1"]
+    assert xml_cell.get("t") == "n"
+    token = xml_cell.find("{*}v")
+    assert token is not None and token.text == "12.5"
+    if type(value) is float:
+        assert float(token.text).hex() == value.hex()
+    else:
+        assert Decimal(token.text) == value
+    reopened = load_workbook(output)
+    try:
+        cell = reopened["Numbers"]["A1"]
+        assert cell.number_format == number_format
+        assert cell.data_type == "d"
+        assert type(cell.value) is type(interpreted)
+        assert cell.value == interpreted
+    finally:
+        reopened.close()
+
+
+def test_out_of_range_date_format_preserves_float_token_despite_reader_error(
+    tmp_path: Path,
+) -> None:
+    template = _template(tmp_path / "template.xlsx", 1, ("yyyy-mm-dd",))
+    output = tmp_path / "output.xlsx"
+    warning = r"Cell A1 is marked as a date but the serial value .* is outside the limits for dates"
+
+    result = render_workbook(template, output, {"values": [sys.float_info.max]})
+
+    assert result.output_path == output
+    assert result.diagnostics == ()
+    xml_cell = _xml_cells(output)["A1"]
+    assert xml_cell.get("t") == "n"
+    token = xml_cell.find("{*}v")
+    assert token is not None and token.text == "1.7976931348623157e+308"
+    assert float(token.text).hex() == "0x1.fffffffffffffp+1023"
+    with pytest.warns(UserWarning, match=warning):
+        reopened = load_workbook(output)
+    try:
+        cell = reopened["Numbers"]["A1"]
+        assert cell.number_format == "yyyy-mm-dd"
+        assert cell.data_type == "e"
+        assert type(cell.value) is str
+        assert cell.value == "#VALUE!"
+    finally:
+        reopened.close()
 
 
 _finite_raw_bits = st.binary(min_size=8, max_size=8).filter(

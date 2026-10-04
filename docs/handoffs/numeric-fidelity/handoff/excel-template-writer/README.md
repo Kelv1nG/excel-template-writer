@@ -176,8 +176,9 @@ Update `SPEC.md` before changing behavior, as required by the template writer re
 The contract should distinguish passthrough numeric fidelity from decimal-domain semantics.
 
 Define two layers separately. The serializer guarantee applies to every finite built-in `float`
-that the canonical value model accepts: the XLSX adapter must emit enough information for the
-supported OpenPyXL reader to reconstruct the same binary64 value. The accepted Excel-value domain
+that the canonical value model accepts: the XLSX adapter must emit a numeric XML token that parses
+to the same binary64 value. Reopen-as-float type/bits require an authored format that the pinned
+OpenPyXL reader does not interpret as a date, time, or duration. The accepted Excel-value domain
 remains a public policy enforced before serialization. The `SPEC.md` change must explicitly decide
 whether subnormal values and IEEE 754 extremes are accepted, rejected, or documented as
 library-round-trip-only values, with stable diagnostics for rejections. The shim must not silently
@@ -187,18 +188,26 @@ Suggested contract for supported Python floats:
 
 > A `float` within the documented supported range, written by a whole-cell expression, is emitted
 > as an Excel numeric cell. Saving and reopening the generated workbook through the supported XLSX
-> adapter must recover the same IEEE 754 binary64 value and Python `float` type. This includes an
-> integer-valued float such as `1.0`. Signed zero is preserved unless the specification explicitly
-> chooses and tests normalization. The writer must not introduce an undocumented numeric rounding
-> step.
+> adapter with a non-temporal format must recover the same IEEE 754 binary64 value and Python
+> `float` type. This includes an integer-valued float such as `1.0`. Signed zero is preserved unless
+> the specification explicitly chooses and tests normalization. The writer must not introduce an
+> undocumented numeric rounding step.
 
 This is a library save-and-reopen contract. It does not promise that a value will remain unchanged
 after a person edits it or Microsoft Excel recalculates and saves it. If exact behavior after an
 Excel application round-trip is a requirement, test that workflow separately.
 
 The selected `repr` behavior intentionally writes `1.0` as `1.0` rather than stock OpenPyXL's `1`.
-OpenPyXL therefore reopens it as a `float` instead of an `int`. That type fidelity is part of the
-proposed contract and must be recorded in `SPEC.md` because it is publicly observable.
+OpenPyXL therefore reopens it as a `float` instead of an `int` with non-temporal formats. That type
+fidelity is part of the proposed contract and must be recorded in `SPEC.md` because it is publicly
+observable.
+
+Authored formats remain preserved. For floats and accepted Decimals with recognized temporal
+formats, OpenPyXL may return temporal Python values or `#VALUE!` for out-of-range serials even
+though the numeric XML token remains exact. Accepted Decimal tokens preserve the original amount;
+reopening returns a float only under the same non-temporal-format condition. This existing reader
+interpretation adds no new temporal fidelity guarantee. The normative contract is in
+[`SPEC.md`](../../../../../SPEC.md), which supersedes the historical suggestions in this handoff.
 
 These type and signed-zero guarantees are specific to the template writer's OpenPyXL adapter.
 SpreadsheetML numeric cells and desktop Excel do not generally promise to preserve a Python
@@ -419,7 +428,7 @@ other formatter boundaries, plus very small and very large supported values. Def
 explicit policy for values Excel does not support, including subnormals and out-of-range finite
 values.
 
-For each supported float:
+For each supported float with a non-temporal format:
 
 1. Render it through a whole-cell template expression.
 2. Save the workbook.
@@ -485,7 +494,8 @@ The change is complete when all of the following are true:
   subnormals, integer boundaries, and Decimal output behavior.
 - The direct OpenPyXL dependency and lock file are pinned to the same verified version.
 - Each supported regression value survives render, save, and reopen with the expected binary64
-  value.
+  value when the reader does not interpret its format as temporal; temporal-format cases assert
+  numeric-token fidelity independently from reader interpretation.
 - At least one test inspects the actual worksheet XML numeric token.
 - The Polars path is covered and does not receive an unnecessary Decimal conversion.
 - Display formatting is tested separately from numeric equality.
@@ -506,8 +516,9 @@ The change is complete when all of the following are true:
 
 Excel's number format controls what a user sees. Two cells can contain identical binary values but
 display different text, or display identical text while containing different binary values.
-Numeric fidelity tests must compare the reopened value, while presentation tests compare the cell's
-`number_format` and rendered appearance separately.
+Numeric fidelity tests compare the reopened float with non-temporal formats. For recognized
+temporal formats, compare the numeric XML token independently from reader interpretation.
+Presentation tests compare the cell's `number_format` and rendered appearance separately.
 
 ### Formula text versus calculated value
 

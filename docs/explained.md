@@ -495,8 +495,12 @@ also affects other OpenPyXL writers in the same process; it edits no installed l
 Numeric and compatibility failures leave the destination absent or unchanged. Later writes use a
 temporary file, package checks, reopening, and atomic replacement. Runtime reopening is a basic
 package-integrity check, not an exhaustive per-cell numeric audit. Focused tests establish the
-pinned-library round-trip contract; a frozen desktop-Excel reference supplies bounded comparison
-evidence, not a guarantee about arbitrary arithmetic or Excel resaving output.
+pinned-library round-trip contract: numeric XML tokens preserve finite built-in float bits and
+accepted Decimal amounts, while reopen-as-float fidelity requires a number format that the reader
+does not interpret as a date, time, or duration. Authored formats remain preserved; recognized
+temporal formats can yield temporal Python values or `#VALUE!` for out-of-range serials without
+token loss or a new temporal fidelity guarantee. A frozen desktop-Excel reference supplies bounded
+comparison evidence, not a guarantee about arbitrary arithmetic or Excel resaving output.
 
 The adapter is implemented in [`xlsx/`](../src/excel_template_writer/xlsx). It snapshots every
 material cell, including styled blanks; copies direct cell formatting from each planned

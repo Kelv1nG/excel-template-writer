@@ -187,7 +187,9 @@ part.
 ## What to check when a value looks wrong
 
 1. Compare the Python values with `repr(value)`.
-2. For floats, compare `value.hex()` before writing and after reopening the saved workbook.
+2. For floats with non-temporal formats, compare `value.hex()` before writing and after reopening
+   the saved workbook. With date/time/duration formats, check the numeric XML token separately
+   from the reader's temporal interpretation.
 3. Check the actual worksheet XML `<v>` token when the bits changed.
 4. Check the destination cell's `number_format` when only the visible text changed.
 5. Determine whether the source cell contains a constant, formula text, or a cached formula result.
@@ -208,7 +210,8 @@ filtering, and downstream type inference.
 
 ## Writer reminder
 
-For a no-op copy, the desired invariant is:
+For a no-op copy with a format that the reader does not interpret as a date, time, or duration,
+the desired invariant is:
 
 ```python
 assert type(reopened_value) in (int, float)
@@ -218,6 +221,12 @@ assert float(reopened_value).hex() == source_value.hex()
 Use a save-and-reopen integration test. Checking only the in-memory destination cell before
 `Workbook.save()` will miss the confirmed OpenPyXL serialization loss. Test numeric type separately
 if the public contract distinguishes an integer result from an equal floating-point result.
+
+The current template-writer contract preserves finite built-in float bits and accepted Decimal
+amounts in numeric XML for every authored format. Pinned OpenPyXL can interpret temporal formats
+as temporal Python values or `#VALUE!` for out-of-range serials; this is not token loss and adds no
+temporal fidelity guarantee. Accepted Decimals reopen as floats only under the same
+non-temporal-format condition. Desktop Excel resave fidelity remains outside the guarantee.
 
 Keep numeric serialization fixes at the XLSX writer boundary. Avoid changing the reader or forcing
 all fractional values to `Decimal` merely to compensate for a writer dependency.
