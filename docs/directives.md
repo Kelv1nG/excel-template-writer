@@ -138,6 +138,36 @@ Merged ranges fully contained in a row- or cell-shift block repeat with it. Unde
 each destination must already contain an exact matching merge. A crossing or mismatched merge is
 invalid.
 
+### Numeric output
+
+A sole expression such as `{{ invoice.amount }}` writes a numeric cell for a supported number.
+Its stored amount and display format are independent: `Decimal("12.50")` stores the amount `12.5`,
+while the authored number format `0.00` displays `12.50`. Formatting does not round the stored
+value. Mixed content such as `Amount: {{ invoice.amount }}` deliberately produces text.
+
+Finite built-in floats retain their exact type and bits when renderer output is reopened with the
+pinned OpenPyXL reader and the authored number format is not interpreted as a date, time, or
+duration. The numeric XML token preserves the binary64 value regardless of format. Authored
+formats remain preserved; recognized temporal formats may reopen as temporal Python values or
+`#VALUE!` for out-of-range serials. This is reader interpretation, not token loss, and adds no
+temporal fidelity guarantee. Preservation after desktop Excel opens, edits, recalculates, or
+resaves the file is not guaranteed, and integers receive no new fidelity guarantee.
+
+Decimal numeric output requires a finite amount with at most 15 significant digits, counting
+coefficient digits after removing trailing zeros (zero counts as one). Conversion to float must
+be finite, and a nonzero amount must be at least `sys.float_info.min` in magnitude after conversion.
+Finally, `Decimal(repr(float(value)))` must equal the original amount. Accepted values remain
+numeric in XML with the original decimal amount and reopen as floats under the same
+non-temporal-format condition; recognized temporal formats have the same reader interpretation
+described above. Decimal type, exponent, scale, and signed-zero identity are not retained.
+These rules apply to final numeric cells, including arithmetic results; unused
+Decimals and Decimals deliberately rendered as text are not subject to this boundary.
+
+The renderer never implicitly rounds or converts an unsupported amount to text. Callers own
+rounding and preprocessing, including any result columns computed in Polars. Errors `E3203`–`E3205`
+identify every affected rendered worksheet/cell. Compatibility errors `E3206`–`E3207` identify
+`<workbook>!A1`. Any of these errors leaves an absent output absent or an existing output unchanged.
+
 ### Expression features
 
 The current expression language supports:
@@ -760,6 +790,11 @@ compilation. Loops accept `rows`, `cells`, or `none`; regions accept only `rows`
 | `E3101` | Formula would require copying, movement, or translation |
 | `E3201` | Input and output resolve to the same path |
 | `E3202` | Input or output is not an `.xlsx` file |
+| `E3203` | Decimal numeric amount exceeds 15 significant digits |
+| `E3204` | Decimal conversion overflows, underflows, or produces a nonzero binary64 subnormal |
+| `E3205` | Round-trip-safe numeric token does not equal the Decimal amount |
+| `E3206` | Installed OpenPyXL version is not certified |
+| `E3207` | Numeric serializer hook, ownership, activation, or behavioral self-test failed |
 
 Diagnostics include at least the worksheet and cell, and lexical diagnostics also carry character offsets.
 Context diagnostics instead carry a canonical input path beginning with `context`.

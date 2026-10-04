@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date
+from decimal import Decimal
 from pathlib import Path
 
 from openpyxl import Workbook, load_workbook
@@ -39,7 +40,7 @@ def build_template(path: Path = TEMPLATE_PATH) -> Path:
         sheet,
         "Scalar values and expressions",
         "Typed expressions support explicit filters, collection aggregates, and basic arithmetic.",
-        widths=(24, 62, 34),
+        widths=(30, 62, 34),
     )
     sheet.append(["Case", "Template value", "Expected behavior"])
     paint(sheet, "A4:C4", fill=LIGHT_BLUE, bold=True, horizontal="center")
@@ -83,6 +84,13 @@ def build_template(path: Path = TEMPLATE_PATH) -> Path:
         ),
         ("Unary signs", "{{ -math.adjustment + +math.base }}", "native number: 80"),
         ("Default filter", '{{ missing | default("not supplied") }}', "explicit fallback"),
+        ("Float bit fidelity", "{{ numeric.float_value }}", "exact pinned-reader float bits"),
+        (
+            "15-digit financial Decimal",
+            "{{ numeric.financial_amount }}",
+            "numeric amount: 1234567890123.45",
+        ),
+        ("Decimal display scale", "{{ numeric.scaled_amount }}", "12.50 via authored format"),
     )
     for row_number, values in enumerate(rows, start=5):
         for column, value in enumerate(values, start=1):
@@ -95,6 +103,9 @@ def build_template(path: Path = TEMPLATE_PATH) -> Path:
     sheet["B16"].number_format = '$#,##0.00;[Red]-$#,##0.00;"-"'
     for coordinate in ("B17", "B18", "B20", "B21"):
         sheet[coordinate].number_format = '$#,##0.00;[Red]-$#,##0.00;"-"'
+    sheet["B24"].number_format = "0.00000000000"
+    sheet["B25"].number_format = "#,##0.00"
+    sheet["B26"].number_format = "0.00"
     result = atomic_save(workbook, path)
     workbook.close()
     return result
@@ -122,7 +133,7 @@ def render_sample(
             "invoice": {
                 "number": "INV-1042",
                 "quantity": 3,
-                "amount": 1250.75,
+                "amount": Decimal("1250.75"),
                 "issued_on": date(2026, 8, 19),
                 "approved": True,
             },
@@ -136,6 +147,11 @@ def render_sample(
                 "discount": 40,
                 "divisor": 4,
             },
+            "numeric": {
+                "float_value": 100000.00000000001,
+                "financial_amount": Decimal("1234567890123.45"),
+                "scaled_amount": Decimal("12.50"),
+            },
         },
     )
     assert_no_template_tags(output_path)
@@ -145,6 +161,8 @@ def render_sample(
         assert sheet["B5"].value == "Acme Industries"
         assert sheet["B6"].value == 3
         assert sheet["B7"].value == 1250.75
+        assert sheet["B7"].data_type == "n" and type(sheet["B7"].value) is float
+        assert sheet["B7"].number_format == '$#,##0.00;[Red]-$#,##0.00;"-"'
         assert sheet["B8"].data_type == "d"
         assert sheet["B9"].value == "2026-08"
         assert sheet["B9"].data_type == "s"
@@ -170,6 +188,17 @@ def render_sample(
         assert sheet["B22"].value == 80
         assert sheet["B22"].data_type == "n"
         assert sheet["B23"].value == "not supplied"
+        assert sheet["B24"].data_type == "n" and type(sheet["B24"].value) is float
+        assert sheet["B24"].value.hex() == (100000.00000000001).hex()
+        assert sheet["B24"].number_format == "0.00000000000"
+        for coordinate, amount, number_format in (
+            ("B25", "1234567890123.45", "#,##0.00"),
+            ("B26", "12.50", "0.00"),
+        ):
+            cell = sheet[coordinate]
+            assert cell.data_type == "n" and type(cell.value) is float
+            assert Decimal(repr(cell.value)) == Decimal(amount)
+            assert cell.number_format == number_format
     finally:
         workbook.close()
     return output_path

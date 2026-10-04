@@ -44,6 +44,16 @@ def test_accepts_complete_canonical_value_tree() -> None:
     assert validate_context(context) == ()
 
 
+def test_normalization_keeps_xlsx_unsupported_finite_numeric_values_canonical() -> None:
+    decimal = Decimal("1234567890123456")
+    subnormal = 5e-324
+
+    normalized = normalize_context({"amount": decimal, "subnormal": subnormal}).require()
+
+    assert normalized["amount"] is decimal
+    assert normalized["subnormal"] is subnormal
+
+
 def test_reports_every_invalid_value_with_its_context_path() -> None:
     context = {
         "rows": [{"amount": float("inf")}, {"amount": Decimal("NaN")}],

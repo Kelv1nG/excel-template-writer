@@ -23,9 +23,9 @@ and layout planner.
 
 - Support non-macro .xlsx workbooks only. This change does not add .xlsm support.
 - Pin the direct dependency to OpenPyXL 3.1.5, the version whose private writer hook is certified.
-- Preserve every finite built-in Python float through the supported OpenPyXL save-and-reopen path,
-  including integer-valued floats, both signs of zero, subnormals, and the finite binary64
-  extremes.
+- Preserve every finite built-in Python float in numeric XML, including integer-valued floats,
+  both signs of zero, subnormals, and the finite binary64 extremes. Exact float type/bits after
+  pinned OpenPyXL reopen require a format that it does not interpret as a date, time, or duration.
 - Write a finite Decimal as an Excel numeric cell only when it is inside the documented 15-digit
   decimal domain and its adapter conversion does not change the represented decimal amount.
 - Treat Decimal scale as presentation rather than stored-value identity. Values such as 12.5,
@@ -40,7 +40,7 @@ and layout planner.
 ## Goals
 
 - Make no-op transfer of a finite float bit-preserving across template render, XLSX save, and
-  OpenPyXL reopen.
+  OpenPyXL reopen with non-temporal number formats; preserve its numeric XML token for all formats.
 - Give financial Decimal values a deterministic, documented acceptance rule through 15
   significant digits.
 - Preserve numeric cell semantics so Excel formulas, sorting, filtering, and downstream readers
@@ -74,8 +74,9 @@ and layout planner.
 ### Finite built-in floats
 
 The contract applies when a planned numeric cell value has exact type float and is finite. The
-XLSX writer emits a numeric worksheet cell whose decimal XML token is sufficient for the pinned
-OpenPyXL reader to reconstruct:
+XLSX writer emits a numeric worksheet cell whose decimal XML token preserves its binary64 value.
+When the effective authored number format is not interpreted by the pinned OpenPyXL reader as a
+date, time, or duration, reopening reconstructs:
 
 - exact Python type float, including a value such as 1.0; and
 - the same IEEE 754 binary64 bit pattern, measured by float.hex() or an equivalent raw-bit check.
@@ -84,16 +85,16 @@ The adapter uses repr(value) as the worksheet token. Modern Python chooses the s
 token that parses back to the same binary64 value. The adapter does not assign that token as the
 cell value, because doing so would create a text cell.
 
-The library round-trip guarantee includes +0.0, -0.0, binary64 subnormal values,
-sys.float_info.min, and sys.float_info.max. These edge values are not a promise about desktop
-Excel's behavior after open-and-save. Non-finite floats remain rejected by the existing canonical
-value and expression diagnostics before XLSX preflight.
+The stored-token guarantee and non-temporal-format library round trip include +0.0, -0.0,
+binary64 subnormal values, sys.float_info.min, and sys.float_info.max. These edge values are not a
+promise about desktop Excel's behavior after open-and-save. Non-finite floats remain rejected by
+the existing canonical value and expression diagnostics before XLSX preflight.
 
-This guarantee covers every final planned cell with an exact built-in float, whether the value was
-static in the source model, produced by a whole-cell expression, or repeated from input data.
-Float subclasses keep their existing best-effort behavior and are outside the new guarantee; the
-shim deliberately delegates them to OpenPyXL's original formatter rather than guessing their
-semantics.
+The stored-token guarantee covers every final planned cell with an exact built-in float, whether
+the value was static in the source model, produced by a whole-cell expression, or repeated from
+input data. Float subclasses keep their existing best-effort behavior and are outside the new
+guarantee; the shim deliberately delegates them to OpenPyXL's original formatter rather than
+guessing their semantics.
 
 ### Finite Decimal values
 
@@ -120,8 +121,9 @@ context.
 Condition 5 means that the decimal token placed in worksheet XML represents the same decimal
 amount. It does not claim that values such as 0.1 have an exact finite binary representation.
 Accepted Decimal values are converted to built-in float at the XLSX boundary and then receive the
-same round-trip-safe serialization as other floats. Reopening therefore produces a float, not a
-Decimal.
+same round-trip-safe serialization as other floats. Reopening produces a float under the same
+non-temporal-format condition; temporal formats receive the existing reader interpretation
+described below. Decimal type, exponent, scale, and signed-zero identity are not preserved.
 
 Validation order is deterministic: non-finite input is handled by existing validation, followed by
 precision, range, and then decimal-token equality. A value that fails more than one predicate gets
@@ -132,6 +134,13 @@ the first diagnostic in that order.
 Cell number_format remains authored presentation and is independent from stored numeric equality.
 For example, 12.5 may display as 12.50 when the template uses format 0.00. Numeric tests compare the
 stored value separately from number-format tests.
+
+Authored number formats remain preserved for both floats and accepted Decimals. With a recognized
+temporal format, pinned OpenPyXL may interpret the exact numeric token as a temporal Python value
+(date, time, datetime, or timedelta), or return #VALUE! for an out-of-range serial. This is existing
+reader interpretation, not token loss, and adds no temporal fidelity guarantee. The exact
+reopen-as-float type/bit guarantee applies only to formats that the reader does not interpret as
+dates, times, or durations. The same qualification applies to accepted Decimals.
 
 Integers continue through OpenPyXL's original formatter and keep their current behavior; this
 change adds no new large-integer guarantee. The compatibility wrapper also delegates booleans,
@@ -155,7 +164,7 @@ The production sequence remains:
 3. compile, validate, evaluate, and plan every worksheet;
 4. plan workbook features for every worksheet;
 5. run adapter-local numeric preflight over every completed sheet plan;
-6. ensure the OpenPyXL compatibility layer is installed and healthy;
+6. ensure the OpenPyXL compatibility layer is active in memory and healthy;
 7. create, populate, serialize, verify, and atomically publish the destination workbook.
 
 No live destination workbook exists during numeric preflight. Any numeric diagnostic prevents the
@@ -183,8 +192,8 @@ behavior possible.
 The internal `write_workbook()` boundary invokes preflight and the compatibility guard before it
 constructs an OpenPyXL `Workbook`. The public `render_workbook()` therefore cannot bypass them, and
 an internal caller of the writer receives the same fail-closed behavior. Input loading occurs
-earlier because it does not serialize cells; deferring process-global installation until the write
-boundary avoids changing process state for a template that fails compilation or layout.
+earlier because it does not serialize cells; deferring process-global in-memory activation until
+the write boundary avoids changing process state for a template that fails compilation or layout.
 
 ### OpenPyXL compatibility module
 
@@ -203,12 +212,14 @@ return original_safe_string(value)
 The exact-type check is intentional. It prevents Decimal, NumPy scalars, booleans, or arbitrary
 numeric-looking objects from receiving an invalid repr token.
 
-Installation verifies all of the following before normal workbook serialization:
+In-memory activation neither installs a package nor edits OpenPyXL files on disk. Dependency
+installation remains managed by uv. Activation verifies all of the following before normal
+workbook serialization:
 
 - the installed distribution version is exactly 3.1.5 and is in the local allowlist;
 - the expected private module and hook exist;
-- before first installation, the hook is the expected stock OpenPyXL formatter;
-- an already-installed wrapper carries this project's ownership/version marker and points to the
+- before first activation, the hook is the expected stock OpenPyXL formatter;
+- an already-active wrapper carries this project's ownership/version marker and points to the
   captured original formatter; and
 - an in-memory save-and-reopen self-test preserves the float.hex() value of
   100000.00000000001.
@@ -218,19 +229,21 @@ formatter.
 
 ### Lifetime, ownership, and concurrency
 
-Installation is guarded by one module lock and a process-lifetime state machine:
+In-memory activation is guarded by one module lock and a process-lifetime state machine:
 
 ```text
 UNINSTALLED -> INSTALLING -> INSTALLED
                           -> FAILED
 ```
 
+These internal state labels refer only to in-memory hook activation, not package installation.
+
 Concurrent callers wait during INSTALLING. INSTALLED calls cheaply verify that the active hook is
 still the owned wrapper. If another library replaces it, the state becomes sticky FAILED. A failed
 self-test restores the captured original only when the hook still points to this project's wrapper,
 then records the failure. Later calls return the cached diagnostic instead of retrying silently.
 
-The wrapper is never installed and removed around an individual save. Toggling a process-global
+The wrapper is never activated and removed around an individual save. Toggling a process-global
 hook per save would create a race. Separate render requests must still use separate OpenPyXL
 Workbook instances and distinct output paths; this design does not make a shared Workbook
 thread-safe.
@@ -241,8 +254,9 @@ must isolate one writer in another process or adopt the OOXML-rewrite alternativ
 
 ### Version pin and upgrade rule
 
-pyproject.toml changes from the current compatible range to openpyxl==3.1.5, and uv.lock is updated
-with uv. The version allowlist and dependency pin must change together.
+The direct dependency is pinned exactly to `openpyxl==3.1.5`; the compatibility allowlist contains
+exactly `3.1.5`. The dependency pin, `uv.lock`, and allowlist must change together, with dependency
+installation and lock updates managed by uv.
 
 An OpenPyXL upgrade requires inspection of its numeric cell-writing path plus the full numeric
 fidelity suite. The maintainer must then certify the new hook, adapt the shim, or remove the shim if
@@ -251,9 +265,10 @@ without that review.
 
 ### Atomic output behavior
 
-Decimal policy failures occur before writer mutation. Compatibility installation and its self-test
-use an in-memory workbook before the destination writer is entered. Failures during the later save
-continue to use the existing temporary-file, package-verification, reopen, and atomic-replace path.
+Decimal policy failures occur before writer mutation. Compatibility in-memory activation and its
+self-test use an in-memory workbook before the destination writer is entered. Failures during the
+later save continue to use the existing temporary-file, package-verification, reopen, and
+atomic-replace path.
 
 Thus every numeric or compatibility error has the same publication rule: no partial workbook is
 returned, an absent destination is not created, and an existing destination is not replaced.
@@ -268,7 +283,7 @@ Add these stable codes in the existing E32xx XLSX-operation family:
 | E3204 | XLSX_DECIMAL_OUT_OF_RANGE | Rendered Sheet!cell | Conversion overflows, underflows, or would produce a nonzero binary64 subnormal. |
 | E3205 | XLSX_DECIMAL_INEXACT | Rendered Sheet!cell | The round-trip-safe binary64 token is not numerically equal to the Decimal amount. |
 | E3206 | XLSX_OPENPYXL_COMPAT_UNVERIFIED | <workbook>!A1 | Installed OpenPyXL version is not certified. |
-| E3207 | XLSX_OPENPYXL_COMPAT_FAILED | <workbook>!A1 | The expected hook, ownership check, installation, or behavioral self-test failed. |
+| E3207 | XLSX_OPENPYXL_COMPAT_FAILED | <workbook>!A1 | The expected hook, ownership check, in-memory activation, or behavioral self-test failed. |
 
 Finite Decimal policy errors are TemplateRenderError diagnostics because they concern planned
 output values, not template syntax. Messages include the rejected value category without embedding
@@ -279,7 +294,7 @@ Existing E1505 NON_FINITE_CONTEXT_NUMBER and E1307 NON_FINITE_EXPRESSION_NUMBER 
 for non-finite values. No duplicate XLSX diagnostic is added for an error already rejected by the
 core.
 
-E3207 intentionally combines private-hook shape, hook ownership/conflict, installation, and
+E3207 intentionally combines private-hook shape, hook ownership/conflict, in-memory activation, and
 self-test failures because they have the same caller action: stop output and repair or recertify
 the pinned integration. Its stable message identifies the failed check. E3206 remains separate so
 an uncertified dependency upgrade is immediately distinguishable.
@@ -350,12 +365,12 @@ Focused tests prove:
 - the stock OpenPyXL 3.1.5 formatter loses the documented regression value;
 - the wrapper emits a token that parses to the same binary64 value;
 - non-float and non-finite inputs delegate to the captured original formatter;
-- installation is idempotent and never wraps the wrapper again;
-- version, missing-hook, foreign-hook, post-install replacement, and self-test failures fail closed;
-- FAILED is sticky and concurrent ensure calls observe one installation result;
+- in-memory activation is idempotent and never wraps the wrapper again;
+- version, missing-hook, foreign-hook, post-activation replacement, and self-test failures fail closed;
+- FAILED is sticky and concurrent ensure calls observe one activation result;
 - the successful in-memory self-test uses OpenPyXL primitives without recursively entering the
   production render API; and
-- two independent workbooks can save concurrently after successful installation.
+- two independent workbooks can save concurrently after successful activation.
 
 Direct compatibility tests exercise both OpenPyXL cell-writer implementations when available and
 a raw write-only workbook after an explicit ensure call. That is hook coverage only; it does not
@@ -381,15 +396,17 @@ The fixed float matrix includes:
 - the minimum positive subnormal; and
 - sys.float_info.min and sys.float_info.max.
 
-For every float, the reopened value has exact type float and the same float.hex(). Selected XML
-tokens must parse to the same bits and remain numeric cells.
+For every float with a non-temporal format, the reopened value has exact type float and the same
+float.hex(). Selected XML tokens must parse to the same bits and remain numeric cells regardless
+of format. Float and accepted-Decimal temporal-format cases independently assert numeric tokens,
+authored formats, and pinned-reader date/duration or out-of-range-error interpretation.
 
 Accepted Decimal tests assert that:
 
 - the pure render plan still contains the original Decimal;
 - the output XML cell is numeric rather than inline text;
 - Decimal(XML token) equals the source amount;
-- the reopened float has the expected float.hex(); and
+- with non-temporal formats, the reopened float has the expected float.hex(); and
 - the authored number_format remains unchanged.
 
 Rejected Decimal tests assert the exact code and rendered cell location. They cover direct cells,
@@ -450,7 +467,7 @@ change does not add pywin32 or make a licensed Excel installation a development 
 
 SPEC.md is updated before implementation to define:
 
-- the finite-float XLSX round-trip and exact-type contract;
+- the universal finite-float numeric-token contract and non-temporal-format reopen type/bit contract;
 - signed zero, subnormal values, and finite extremes;
 - the five-rule Decimal numeric-cell policy and loss of scale/type identity;
 - number-format responsibility;
@@ -509,7 +526,8 @@ The implementation is complete when:
 
 - SPEC.md contains the approved contract before runtime behavior changes;
 - OpenPyXL and the lock file are pinned to 3.1.5;
-- every fixed and generated supported float round-trips with the same type and binary64 bits;
+- every fixed and generated supported float preserves its binary64 value in numeric XML and
+  round-trips with the same float type/bits when its format is not interpreted as temporal;
 - supported Decimal values through 15 significant digits remain numeric and represent the same
   decimal amount in worksheet XML;
 - unsupported Decimal values fail with stable, precisely located diagnostics and no publication;

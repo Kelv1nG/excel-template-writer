@@ -36,6 +36,8 @@ from excel_template_writer.xlsx.model import (
     TextShapeSnapshot,
     WorkbookSnapshot,
 )
+from excel_template_writer.xlsx.numeric import preflight_numeric_plans
+from excel_template_writer.xlsx.openpyxl_numeric_compat import ensure_openpyxl_numeric_compatibility
 from excel_template_writer.xlsx.package_limits import inspect_xlsx_package
 
 _CHART_NAMESPACE = "http://schemas.openxmlformats.org/drawingml/2006/chart"
@@ -741,8 +743,14 @@ def write_workbook(
         Resolved destination path after successful verification.
 
     Raises:
-        TemplateRenderError: If the serialized package exceeds resource limits.
+        TemplateRenderError: If final Decimal numeric cells are unsupported, numeric
+            serializer compatibility fails, or the serialized package exceeds resource limits.
     """
+
+    adapted_plans = preflight_numeric_plans(plans).require()
+    compatibility_diagnostic = ensure_openpyxl_numeric_compatibility()
+    if compatibility_diagnostic is not None:
+        raise TemplateRenderError((compatibility_diagnostic,))
 
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -757,7 +765,7 @@ def write_workbook(
     workbook.loaded_theme = snapshot.loaded_theme
     for sheet, plan, feature_plan in zip(
         snapshot.sheets,
-        plans,
+        adapted_plans,
         feature_plans,
         strict=True,
     ):

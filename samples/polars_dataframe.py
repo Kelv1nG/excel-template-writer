@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date
+from decimal import Decimal
 from pathlib import Path
 
 import polars as pl
@@ -43,23 +44,26 @@ def build_template(path: Path = TEMPLATE_PATH) -> Path:
     prepare_sheet(
         sheet,
         "Eager Polars DataFrame adapter",
-        "The adapter preserves row order and column names; template syntax remains "
-        "library-neutral.",
-        widths=(30, 18, 18, 18),
+        "Polars computes the Decimal result column before the adapter renders numeric cells.",
+        widths=(30, 18, 18, 18, 24),
     )
-    for column, label in enumerate(("Description", "Amount", "Service date", "Optional"), start=1):
+    for column, label in enumerate(
+        ("Description", "Amount", "Service date", "Optional", "Computed amount"), start=1
+    ):
         sheet.cell(4, column, label)
-    paint(sheet, "A4:D4", fill=NAVY, bold=True, font_color=WHITE, horizontal="center")
+    paint(sheet, "A4:E4", fill=NAVY, bold=True, font_color=WHITE, horizontal="center")
     sheet["A5"] = "{% for line in lines %}{{ line.description }}"
     sheet["B5"] = "{{ line.amount }}"
     sheet["C5"] = "{{ line.service_date }}"
-    sheet["D5"] = "{{ line.optional }}{% endfor %}"
-    paint(sheet, "A5:D5", fill=LIGHT_BLUE)
+    sheet["D5"] = "{{ line.optional }}"
+    sheet["E5"] = "{{ line.computed_amount }}{% endfor %}"
+    paint(sheet, "A5:E5", fill=LIGHT_BLUE)
     sheet["B5"].number_format = '$#,##0.00;[Red]-$#,##0.00;"-"'
+    sheet["E5"].number_format = '$#,##0.00;[Red]-$#,##0.00;"-"'
     sheet["C5"].number_format = "yyyy-mm-dd"
     merge_band(
         sheet,
-        "A6:D6",
+        "A6:E6",
         "Footer moves below DataFrame rows",
         fill=LIGHT_GOLD,
         bold=True,
@@ -87,12 +91,19 @@ def render_sample(
     frame = pl.DataFrame(
         {
             "description": ["Consulting", "Support", "Renewal"],
-            "amount": [1250.0, 350.0, 875.0],
+            "amount": [Decimal("1250.00"), Decimal("350.00"), Decimal("875.00")],
             "service_date": [date(2026, 8, 19), date(2026, 8, 20), date(2026, 8, 21)],
             "optional": [1.0, None, float("nan")],
         },
-        schema_overrides={"service_date": pl.Date},
+        schema_overrides={"service_date": pl.Date, "amount": pl.Decimal(precision=15, scale=2)},
+    ).with_columns(
+        (pl.col("amount") * pl.lit(Decimal("1.05")))
+        .cast(pl.Decimal(precision=15, scale=2))
+        .alias("computed_amount")
     )
+    assert frame.schema["computed_amount"] == pl.Decimal(precision=15, scale=2)
+    scalar = frame["computed_amount"][0]
+    assert type(scalar) is Decimal and scalar == Decimal("1312.50")
     render_workbook(
         template_path,
         output_path,
@@ -109,6 +120,11 @@ def render_sample(
             "Renewal",
         ]
         assert sheet["B7"].value == 875
+        for row, amount in ((5, "1312.50"), (6, "367.50"), (7, "918.75")):
+            cell = sheet[f"E{row}"]
+            assert cell.data_type == "n" and type(cell.value) is float
+            assert Decimal(repr(cell.value)) == Decimal(amount)
+            assert cell.number_format == '$#,##0.00;[Red]-$#,##0.00;"-"'
         assert sheet["C5"].data_type == "d"
         assert sheet["D6"].value is None
         assert sheet["D7"].value is None

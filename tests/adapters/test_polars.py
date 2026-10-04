@@ -1,16 +1,24 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from importlib import import_module
 from pathlib import Path
+from xml.etree import ElementTree
+from zipfile import ZipFile
 
 import pytest
 from openpyxl import Workbook, load_workbook
 
-from excel_template_writer.diagnostics import ContextLocation, DiagnosticCode
+from excel_template_writer.diagnostics import (
+    ContextLocation,
+    DiagnosticCode,
+    SourceLocation,
+    TemplateRenderError,
+)
 from excel_template_writer.limits import ResourceLimits
-from excel_template_writer.values import NormalizationResult, normalize_context
+from excel_template_writer.values import CanonicalValue, NormalizationResult, normalize_context
 from excel_template_writer.xlsx import render_workbook
 
 pl = pytest.importorskip("polars")
@@ -187,3 +195,200 @@ def test_dataframe_renders_through_the_xlsx_entrypoint(tmp_path: Path) -> None:
         assert sheet["B2"].value == 20
     finally:
         rendered.close()
+
+
+def _result_template(path: Path) -> Path:
+    workbook = Workbook()
+    try:
+        sheet = workbook.active
+        sheet.title = "Results"
+        sheet["A1"] = "{% for row in rows %}{{ row.result }}{% endfor %}"
+        sheet["A1"].number_format = "0.0000"
+        workbook.save(path)
+    finally:
+        workbook.close()
+    return path
+
+
+def _assert_result_output(path: Path, values: list[float]) -> None:
+    with ZipFile(path) as archive:
+        root = ElementTree.fromstring(archive.read("xl/worksheets/sheet1.xml"))
+    xml_cells = {cell.attrib["r"]: cell for cell in root.findall(".//{*}c")}
+    reopened = load_workbook(path)
+    try:
+        for index, value in enumerate(values, 1):
+            assert type(value) is float
+            coordinate = f"A{index}"
+            xml_cell = xml_cells[coordinate]
+            assert xml_cell.get("t") == "n"
+            token = xml_cell.find("{*}v")
+            assert token is not None and token.text == repr(value)
+            cell = reopened["Results"][coordinate]
+            assert cell.data_type == "n"
+            assert type(cell.value) is float
+            assert cell.value.hex() == value.hex()
+            assert cell.number_format == "0.0000"
+    finally:
+        reopened.close()
+
+
+def _canonical_results(frame: object) -> list[CanonicalValue]:
+    normalized = normalize_context({"rows": frame}, adapters=polars_adapters()).require()
+    rows = normalized["rows"]
+    assert isinstance(rows, tuple)
+    results: list[CanonicalValue] = []
+    for row in rows:
+        assert isinstance(row, Mapping)
+        results.append(row["result"])
+    return results
+
+
+def test_polars_float_operation_result_round_trips_bit_exactly(tmp_path: Path) -> None:
+    frame = pl.DataFrame({"left": [0.1], "right": [0.2]}).with_columns(
+        (pl.col("left") + pl.col("right")).alias("result")
+    )
+    scalar = frame["result"][0]
+    assert frame.schema["result"] == pl.Float64
+    assert type(scalar) is float
+    assert scalar.hex() == (0.30000000000000004).hex()
+    adapted = _canonical_results(frame)[0]
+    assert type(adapted) is float
+    assert adapted.hex() == scalar.hex()
+    template = _result_template(tmp_path / "template.xlsx")
+    output = tmp_path / "output.xlsx"
+
+    render_workbook(template, output, {"rows": frame}, adapters=polars_adapters())
+
+    _assert_result_output(output, [scalar])
+
+
+def test_polars_decimal_operations_cover_one_through_fifteen_digits(tmp_path: Path) -> None:
+    expected = [Decimal("314159265358979"[:digits]) for digits in range(1, 16)]
+    frame = pl.DataFrame(
+        {
+            "left": [value - Decimal(1) for value in expected],
+            "right": [Decimal(1)] * 15,
+        },
+        schema={"left": pl.Decimal(precision=18, scale=0), "right": pl.Decimal(18, 0)},
+    ).with_columns((pl.col("left") + pl.col("right")).alias("result"))
+    assert frame.schema["result"].is_decimal()
+    assert frame.schema["result"].scale == 0
+    scalars = frame["result"].to_list()
+    assert all(type(scalar) is Decimal for scalar in scalars)
+    assert scalars == expected
+    adapted = _canonical_results(frame)
+    assert all(type(scalar) is Decimal for scalar in adapted)
+    assert adapted == expected
+    template = _result_template(tmp_path / "template.xlsx")
+    output = tmp_path / "output.xlsx"
+
+    render_workbook(template, output, {"rows": frame}, adapters=polars_adapters())
+
+    _assert_result_output(output, [float(value) for value in expected])
+
+
+def test_polars_sixteen_digit_decimal_result_is_rejected_at_destination_cell(
+    tmp_path: Path,
+) -> None:
+    frame = pl.DataFrame(
+        {"left": [Decimal("1234567890123455")], "right": [Decimal(1)]},
+        schema={"left": pl.Decimal(18, 0), "right": pl.Decimal(18, 0)},
+    ).with_columns((pl.col("left") + pl.col("right")).alias("result"))
+    assert frame.schema["result"].is_decimal()
+    scalar = frame["result"][0]
+    assert type(scalar) is Decimal
+    assert scalar == Decimal("1234567890123456")
+    assert _canonical_results(frame) == [scalar]
+    template = _result_template(tmp_path / "template.xlsx")
+    output = tmp_path / "absent" / "output.xlsx"
+
+    with pytest.raises(TemplateRenderError) as caught:
+        render_workbook(template, output, {"rows": frame}, adapters=polars_adapters())
+
+    assert [(item.code, item.location) for item in caught.value.diagnostics] == [
+        (DiagnosticCode.XLSX_DECIMAL_PRECISION_EXCEEDED, SourceLocation("Results", "A1"))
+    ]
+    assert not output.parent.exists()
+
+
+@pytest.mark.parametrize(
+    ("left", "right", "operation", "expected"),
+    [
+        (0.5, 0.25, "add", 0.75),
+        (1.5, 0.25, "subtract", 1.25),
+        (1.125, 2.0, "multiply", 2.25),
+        (5.0, 2.0, "divide", 2.5),
+    ],
+    ids=["0.5+0.25", "1.5-0.25", "1.125*2", "5/2"],
+)
+def test_polars_exact_binary_fraction_operations_round_trip(
+    tmp_path: Path, left: float, right: float, operation: str, expected: float
+) -> None:
+    assert type(expected) is float
+    expressions = {
+        "add": pl.col("left") + pl.col("right"),
+        "subtract": pl.col("left") - pl.col("right"),
+        "multiply": pl.col("left") * pl.col("right"),
+        "divide": pl.col("left") / pl.col("right"),
+    }
+    frame = pl.DataFrame({"left": [left], "right": [right]}).with_columns(
+        expressions[operation].alias("result")
+    )
+    assert frame.schema["result"] == pl.Float64
+    scalar = frame["result"][0]
+    assert type(scalar) is float and scalar.hex() == expected.hex()
+    adapted = _canonical_results(frame)[0]
+    assert type(adapted) is float and adapted.hex() == expected.hex()
+    template = _result_template(tmp_path / "template.xlsx")
+    output = tmp_path / "output.xlsx"
+
+    render_workbook(template, output, {"rows": frame}, adapters=polars_adapters())
+
+    _assert_result_output(output, [expected])
+
+
+@pytest.mark.parametrize(
+    ("left", "right", "operation", "coordinate", "formula"),
+    [
+        (0.5, 0.25, "add", "B19", "=0.5+0.25"),
+        (1.5, 0.25, "subtract", "B20", "=1.5-0.25"),
+        (1.125, 2.0, "multiply", "B21", "=1.125*2"),
+        (5.0, 2.0, "divide", "B22", "=5/2"),
+    ],
+)
+def test_polars_exact_binary_operations_match_frozen_excel_reference(
+    tmp_path: Path, left: float, right: float, operation: str, coordinate: str, formula: str
+) -> None:
+    reference_path = (
+        Path(__file__).parents[1] / "fixtures/numeric_fidelity/excel_numeric_reference.xlsx"
+    )
+    assert reference_path.is_file(), "Frozen desktop-Excel workbook is missing"
+    formulas = load_workbook(reference_path, data_only=False)
+    reference = load_workbook(reference_path, data_only=True)
+    try:
+        assert formulas["NumericReference"][coordinate].value == formula
+        expected = reference["NumericReference"][coordinate].value
+        assert type(expected) is float
+        expressions = {
+            "add": pl.col("left") + pl.col("right"),
+            "subtract": pl.col("left") - pl.col("right"),
+            "multiply": pl.col("left") * pl.col("right"),
+            "divide": pl.col("left") / pl.col("right"),
+        }
+        frame = pl.DataFrame({"left": [left], "right": [right]}).with_columns(
+            expressions[operation].alias("result")
+        )
+        assert frame.schema["result"] == pl.Float64
+        scalar = frame["result"][0]
+        assert type(scalar) is float and scalar.hex() == expected.hex()
+        adapted = _canonical_results(frame)[0]
+        assert type(adapted) is float and adapted.hex() == expected.hex()
+        template = _result_template(tmp_path / "template.xlsx")
+        output = tmp_path / "output.xlsx"
+
+        render_workbook(template, output, {"rows": frame}, adapters=polars_adapters())
+
+        _assert_result_output(output, [expected])
+    finally:
+        formulas.close()
+        reference.close()

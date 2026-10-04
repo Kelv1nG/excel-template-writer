@@ -1,4 +1,5 @@
 from datetime import date
+from decimal import Decimal
 
 import pytest
 
@@ -11,6 +12,16 @@ from excel_template_writer.values import TypeAdapter
 
 def _values_by_coordinate(plan: RenderPlan) -> dict[str, object]:
     return {cell.coordinate.a1: cell.value for cell in plan.cells}
+
+
+def test_render_plan_retains_decimal_unchanged_until_xlsx_preflight() -> None:
+    value = Decimal("1234567890123456")
+    compiled = compile_sheet(WorksheetTemplate.from_rows("Report", [["{{ amount }}"]])).require()
+
+    plan = render_sheet(compiled, {"amount": value}).require()
+
+    assert plan.cells[0].value is value
+    assert plan.cells[0].value.as_tuple() == value.as_tuple()
 
 
 def test_vertical_repeat_inserts_rows_and_moves_content_below() -> None:

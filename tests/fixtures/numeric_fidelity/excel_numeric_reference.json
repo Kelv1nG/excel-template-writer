@@ -1,0 +1,242 @@
+﻿{
+    "schema_version":  1,
+    "producer":  "Microsoft Excel desktop via PowerShell COM",
+    "workbook":  "excel_numeric_reference.xlsx",
+    "created_utc":  "2026-10-02T00:28:51.4763515Z",
+    "excel":  {
+                  "version":  "16.0",
+                  "build":  "19127",
+                  "file_version":  "16.0.19127.20800",
+                  "executable":  "C:\\Program Files (x86)\\Microsoft Office\\Root\\Office16\\EXCEL.EXE"
+              },
+    "locale":  {
+                   "culture":  "en-US",
+                   "country_setting":  1,
+                   "decimal_separator":  ".",
+                   "use_system_separators":  true
+               },
+    "calculation":  {
+                        "mode":  "automatic",
+                        "mode_value":  -4105,
+                        "precision_as_displayed":  false,
+                        "iteration":  false,
+                        "full_rebuild":  true,
+                        "state_after_rebuild":  0,
+                        "automation_security":  3,
+                        "save_format":  51
+                    },
+    "cells":  [
+                  {
+                      "name":  "precision_01",
+                      "sheet":  "NumericReference",
+                      "cell":  "B2",
+                      "formula":  "=0.3",
+                      "decimal":  "0.3",
+                      "precision":  1,
+                      "comparison_mode":  "decimal_amount",
+                      "cached_decimal":  "0.3"
+                  },
+                  {
+                      "name":  "precision_02",
+                      "sheet":  "NumericReference",
+                      "cell":  "B3",
+                      "formula":  "=0.31",
+                      "decimal":  "0.31",
+                      "precision":  2,
+                      "comparison_mode":  "decimal_amount",
+                      "cached_decimal":  "0.31"
+                  },
+                  {
+                      "name":  "precision_03",
+                      "sheet":  "NumericReference",
+                      "cell":  "B4",
+                      "formula":  "=0.314",
+                      "decimal":  "0.314",
+                      "precision":  3,
+                      "comparison_mode":  "decimal_amount",
+                      "cached_decimal":  "0.314"
+                  },
+                  {
+                      "name":  "precision_04",
+                      "sheet":  "NumericReference",
+                      "cell":  "B5",
+                      "formula":  "=0.3141",
+                      "decimal":  "0.3141",
+                      "precision":  4,
+                      "comparison_mode":  "decimal_amount",
+                      "cached_decimal":  "0.3141"
+                  },
+                  {
+                      "name":  "precision_05",
+                      "sheet":  "NumericReference",
+                      "cell":  "B6",
+                      "formula":  "=0.31415",
+                      "decimal":  "0.31415",
+                      "precision":  5,
+                      "comparison_mode":  "decimal_amount",
+                      "cached_decimal":  "0.31415"
+                  },
+                  {
+                      "name":  "precision_06",
+                      "sheet":  "NumericReference",
+                      "cell":  "B7",
+                      "formula":  "=0.314159",
+                      "decimal":  "0.314159",
+                      "precision":  6,
+                      "comparison_mode":  "decimal_amount",
+                      "cached_decimal":  "0.314159"
+                  },
+                  {
+                      "name":  "precision_07",
+                      "sheet":  "NumericReference",
+                      "cell":  "B8",
+                      "formula":  "=0.3141592",
+                      "decimal":  "0.3141592",
+                      "precision":  7,
+                      "comparison_mode":  "decimal_amount",
+                      "cached_decimal":  "0.3141592"
+                  },
+                  {
+                      "name":  "precision_08",
+                      "sheet":  "NumericReference",
+                      "cell":  "B9",
+                      "formula":  "=0.31415926",
+                      "decimal":  "0.31415926",
+                      "precision":  8,
+                      "comparison_mode":  "decimal_amount",
+                      "cached_decimal":  "0.31415926"
+                  },
+                  {
+                      "name":  "precision_09",
+                      "sheet":  "NumericReference",
+                      "cell":  "B10",
+                      "formula":  "=0.314159265",
+                      "decimal":  "0.314159265",
+                      "precision":  9,
+                      "comparison_mode":  "decimal_amount",
+                      "cached_decimal":  "0.314159265"
+                  },
+                  {
+                      "name":  "precision_10",
+                      "sheet":  "NumericReference",
+                      "cell":  "B11",
+                      "formula":  "=0.3141592653",
+                      "decimal":  "0.3141592653",
+                      "precision":  10,
+                      "comparison_mode":  "decimal_amount",
+                      "cached_decimal":  "0.3141592653"
+                  },
+                  {
+                      "name":  "precision_11",
+                      "sheet":  "NumericReference",
+                      "cell":  "B12",
+                      "formula":  "=0.31415926535",
+                      "decimal":  "0.31415926535",
+                      "precision":  11,
+                      "comparison_mode":  "decimal_amount",
+                      "cached_decimal":  "0.31415926535"
+                  },
+                  {
+                      "name":  "precision_12",
+                      "sheet":  "NumericReference",
+                      "cell":  "B13",
+                      "formula":  "=0.314159265358",
+                      "decimal":  "0.314159265358",
+                      "precision":  12,
+                      "comparison_mode":  "decimal_amount",
+                      "cached_decimal":  "0.314159265358"
+                  },
+                  {
+                      "name":  "precision_13",
+                      "sheet":  "NumericReference",
+                      "cell":  "B14",
+                      "formula":  "=0.3141592653589",
+                      "decimal":  "0.3141592653589",
+                      "precision":  13,
+                      "comparison_mode":  "decimal_amount",
+                      "cached_decimal":  "0.3141592653589"
+                  },
+                  {
+                      "name":  "precision_14",
+                      "sheet":  "NumericReference",
+                      "cell":  "B15",
+                      "formula":  "=0.31415926535897",
+                      "decimal":  "0.31415926535897",
+                      "precision":  14,
+                      "comparison_mode":  "decimal_amount",
+                      "cached_decimal":  "0.31415926535897"
+                  },
+                  {
+                      "name":  "precision_15",
+                      "sheet":  "NumericReference",
+                      "cell":  "B16",
+                      "formula":  "=0.314159265358979",
+                      "decimal":  "0.314159265358979",
+                      "precision":  15,
+                      "comparison_mode":  "decimal_amount",
+                      "cached_decimal":  "0.314159265358979"
+                  },
+                  {
+                      "name":  "exact_add",
+                      "sheet":  "NumericReference",
+                      "cell":  "B19",
+                      "formula":  "=0.5+0.25",
+                      "decimal":  "0.75",
+                      "operation":  "add",
+                      "inputs":  [
+                                     "0.5",
+                                     "0.25"
+                                 ],
+                      "evaluation_order":  "single binary operation on literal inputs",
+                      "comparison_mode":  "binary64_exact",
+                      "cached_decimal":  "0.75"
+                  },
+                  {
+                      "name":  "exact_subtract",
+                      "sheet":  "NumericReference",
+                      "cell":  "B20",
+                      "formula":  "=1.5-0.25",
+                      "decimal":  "1.25",
+                      "operation":  "subtract",
+                      "inputs":  [
+                                     "1.5",
+                                     "0.25"
+                                 ],
+                      "evaluation_order":  "single binary operation on literal inputs",
+                      "comparison_mode":  "binary64_exact",
+                      "cached_decimal":  "1.25"
+                  },
+                  {
+                      "name":  "exact_multiply",
+                      "sheet":  "NumericReference",
+                      "cell":  "B21",
+                      "formula":  "=1.125*2",
+                      "decimal":  "2.25",
+                      "operation":  "multiply",
+                      "inputs":  [
+                                     "1.125",
+                                     "2"
+                                 ],
+                      "evaluation_order":  "single binary operation on literal inputs",
+                      "comparison_mode":  "binary64_exact",
+                      "cached_decimal":  "2.25"
+                  },
+                  {
+                      "name":  "exact_divide",
+                      "sheet":  "NumericReference",
+                      "cell":  "B22",
+                      "formula":  "=5/2",
+                      "decimal":  "2.5",
+                      "operation":  "divide",
+                      "inputs":  [
+                                     "5",
+                                     "2"
+                                 ],
+                      "evaluation_order":  "single binary operation on literal inputs",
+                      "comparison_mode":  "binary64_exact",
+                      "cached_decimal":  "2.5"
+                  }
+              ],
+    "regeneration":  "powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/fixtures/numeric_fidelity/build_excel_reference.ps1",
+    "sha256":  "258ada59a76b8fb7f4f115d830e549cb95e38b70e09ca0f76e80d240cab4ea50"
+}

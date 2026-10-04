@@ -5,7 +5,7 @@ description = "A spatial, declarative template interpreter for XLSX workbooks"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
-    "openpyxl>=3.1.5,<4",
+    "openpyxl==3.1.5",
 ]
 
 [project.optional-dependencies]
@@ -19,6 +19,7 @@ build-backend = "hatchling.build"
 
 [dependency-groups]
 dev = [
+    "hypothesis>=6,<7",
     "pytest>=9.0,<10",
     "ruff>=0.16,<0.17",
     "ty>=0.0.70,<0.1",
