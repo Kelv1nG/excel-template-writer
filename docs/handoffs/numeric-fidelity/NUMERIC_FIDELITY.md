@@ -208,6 +208,129 @@ part.
 Do not silently write an unrepresentable `Decimal` as text. That changes Excel formulas, sorting,
 filtering, and downstream type inference.
 
+## Polars ingestion through DuckDB to Excel
+
+For financial reporting, a representative preprocessing path is:
+
+```text
+Polars ingestion
+    → register or load the frame in DuckDB
+    → perform an explicitly typed group-by or other transformation
+    → materialize the final result as an eager Polars DataFrame with `.pl()`
+    → normalize it with `polars_adapters()` into canonical values
+    → render those values into an .xlsx template
+    → inspect numeric XML and reopen the workbook
+```
+
+DuckDB remains an input-preprocessing concern. The renderer does not execute SQL, perform grouping,
+or provide a bundled DuckDB adapter. The caller must materialize the final ordered records before
+rendering, either as ordinary Python values or through an explicit platform adapter. A Polars frame
+materialized from DuckDB with `.pl()` uses the bundled `polars_adapters()` only after the SQL
+transformation is complete; do not pass a live DuckDB relation or cursor to the renderer.
+
+Use explicit numeric types at the DuckDB boundary:
+
+- use `DOUBLE` only when the intended domain is binary64 passthrough;
+- use `DECIMAL(p, s)` for fixed-scale financial amounts, with `p`, `s`, and the rounding rule stated
+  by the business contract; and
+- cast the final aggregate deliberately instead of relying on DuckDB's inferred aggregate width or
+  scale.
+
+Assert the actual registered and result types rather than relying on a bare `DECIMAL` declaration or
+implicit casts. Division involving a DuckDB Decimal produces approximate floating-point output, so
+division and any other type-changing transformation need an explicit business rounding and cast back
+to the intended `DECIMAL(p, s)` before rendering.
+
+A deterministic financial group-by test should use a query shaped like this:
+
+```sql
+SELECT
+    reporting_key,
+    CAST(
+        ROUND(
+            COALESCE(SUM(CAST(amount AS DECIMAL(15, 2))), 0),
+            2
+        ) AS DECIMAL(15, 2)
+    ) AS reported_amount
+FROM ingested_polars
+GROUP BY reporting_key
+ORDER BY reporting_key;
+```
+
+The precision and scale in this example are illustrative. Choose them from the reporting contract,
+and ensure every final amount also satisfies the writer's supported-Decimal predicate. `ORDER BY`
+is required because SQL group output order is otherwise unspecified. A final result `ORDER BY`
+does not define the input order of an aggregate. If a diagnostic test intentionally aggregates
+`DOUBLE` values and compares exact bits, give every source row a stable ordinal and use DuckDB's
+aggregate `ORDER BY` syntax, such as `SUM(amount ORDER BY source_ordinal)`, while keeping the same
+source order in the Excel reference. Prefer `DECIMAL` plus business-scale comparison for financial
+tests because floating-point `SUM` is order-sensitive. `COALESCE` is intentional when the
+Excel oracle treats a group containing only blanks as zero: DuckDB `SUM` over only `NULL` values is
+`NULL`, while an Excel `SUMIFS`-style calculation commonly returns zero. If null and zero have
+different business meanings, preserve the null instead.
+
+### Group-by comparison protocol
+
+Test each boundary independently so a DuckDB change is not mistaken for an XLSX writer regression:
+
+1. Assert the ingested Polars schema and source scalars, including the distinction among null,
+   floating-point NaN, and numeric zero.
+2. Assert DuckDB's registered column types, the final query schema, group keys, and ordered result
+   values. For `DECIMAL`, compare exact decimal values and the declared result scale.
+3. Assert the eager Polars schema, row order, and scalar values returned by `.pl()`, then assert the
+   canonical values produced by `polars_adapters()`. The template should only select the
+   already-computed result, for example `{{ row.reported_amount }}`.
+4. Render through the production XLSX path, assert that the cell is numeric, and compare the selected
+   worksheet XML `<v>` token with the supported source amount.
+5. Reopen the output with the pinned OpenPyXL version and apply the writer's documented
+   non-temporal-format assertions.
+6. For an Excel comparison, use an immutable workbook that desktop Excel fully recalculated and
+   saved. Give Excel the same source rows and reporting keys, use an explicit `SUMIFS` plus `ROUND`
+   formula (or another documented equivalent), and record the Excel build and calculation settings.
+
+Cover all significant-digit counts from 1 through 15, several groups, duplicate keys, positive and
+negative amounts, cancellation, zero, null-only groups, values on both sides of a rounding boundary,
+and a supported 15-digit aggregate. Include a 16-digit or otherwise unsupported final Decimal as a
+negative control and assert the writer diagnostic at the rendered destination cell.
+
+DuckDB `DECIMAL` aggregation and Excel formula calculation do not use the same arithmetic domain:
+DuckDB calculates the selected fixed-scale decimal operation exactly, while Excel calculates with
+binary64 values and exposes at most 15 significant digits. Compare their results at the explicitly
+declared reporting scale after the same business rounding rule. Do not use this test to claim raw-bit
+equivalence, arbitrary `DOUBLE` reduction equivalence, identical reassociation, or general parity
+among DuckDB, Polars, and Excel. The writer guarantee begins after the final value is materialized.
+
+### Local group-by characterization
+
+A local characterization run on 2026-10-05 exercised the complete path with DuckDB 1.5.5, Polars
+1.43.2, desktop Excel 16.0 build 19127.0, and the production XLSX writer. This is recorded evidence,
+not a default-CI guarantee or a pinned DuckDB dependency:
+
+- all 15 quarter-unit aggregate cases spanning 1 through 15 significant digits matched between
+  DuckDB `DECIMAL`, Excel `SUMIFS`, the written numeric XML token, and the reopened workbook;
+- the writer preserved all 19 DuckDB Decimal aggregate results, and Polars materialization matched
+  DuckDB in all 19;
+- unrounded Excel results matched exact DuckDB Decimal arithmetic in 16 of 19 cases. Expected
+  binary64 tails appeared for `0.1 + 0.2`, ten additions of `0.1`, and one 15-digit fractional sum;
+- seven small `DOUBLE` aggregates matched DuckDB and Excel bit-for-bit, and the writer preserved all
+  seven, while a separate native Polars group-by produced different bits in three cases; and
+- a financial-scale comparison using DuckDB `ROUND(SUM(amount), 2)` and Excel
+  `ROUND(SUMIFS(...), 2)` matched in all eight cases, including tenths, mixed cents, a 15-digit
+  fractional input, positive and negative half-cent cases, and values immediately below and above a
+  cent-rounding boundary. The XLSX token and reopened value also matched every rounded result.
+
+These cases support preservation of the value DuckDB produced and selected shared business-rounded
+results. They do not establish generic aggregate parity, especially for larger or reordered
+floating-point groups, different DuckDB execution plans, other Excel builds, or formulas other than
+the recorded `SUMIFS` cases.
+
+Relevant DuckDB references:
+
+- [Python and Polars integration](https://duckdb.org/docs/stable/clients/python/overview)
+- [Aggregate functions and null handling](https://duckdb.org/docs/stable/sql/functions/aggregates)
+- [Order-preservation rules](https://duckdb.org/docs/stable/sql/dialect/order_preservation)
+- [Numeric and fixed-point types](https://duckdb.org/docs/stable/sql/data_types/numeric)
+
 ## Writer reminder
 
 For a no-op copy with a format that the reader does not interpret as a date, time, or duration,
