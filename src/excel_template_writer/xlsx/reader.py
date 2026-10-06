@@ -12,16 +12,23 @@ from typing import Any, cast
 from xml.etree import ElementTree
 from zipfile import ZipFile
 
-from openpyxl import load_workbook
+from openpyxl import Workbook, load_workbook
 from openpyxl.cell.cell import Cell, MergedCell
 from openpyxl.chart import AreaChart, BarChart, LineChart, PieChart, ScatterChart
 from openpyxl.chart.chartspace import ChartSpace
 from openpyxl.chart.reader import read_chart
 from openpyxl.drawing.spreadsheet_drawing import AbsoluteAnchor, OneCellAnchor, TwoCellAnchor
+from openpyxl.styles import NamedStyle
 from openpyxl.utils import column_index_from_string
 from openpyxl.worksheet.cell_range import CellRange
 from openpyxl.worksheet.worksheet import Worksheet
 
+from excel_template_writer.diagnostics import (
+    Diagnostic,
+    DiagnosticCode,
+    SourceLocation,
+    TemplateCompilationError,
+)
 from excel_template_writer.model import Coordinate, Rectangle, WorksheetTemplate
 from excel_template_writer.xlsx.model import (
     CellPresentation,
@@ -30,6 +37,7 @@ from excel_template_writer.xlsx.model import (
     DimensionPresentation,
     DrawingSnapshot,
     ImageSnapshot,
+    NormalStylePresentation,
     RowPresentation,
     SheetSnapshot,
     TextShapeSnapshot,
@@ -679,6 +687,57 @@ def _cell_presentation(cell: Any) -> CellPresentation:
     )
 
 
+def _select_normal_style(workbook: Workbook) -> NamedStyle:
+    """Find the source Normal style without accepting an ambiguous match.
+
+    Args:
+        workbook: Loaded source workbook with bound named styles.
+
+    Returns:
+        The uniquely identified Normal named style.
+
+    Raises:
+        TemplateCompilationError: No unambiguous Normal style exists.
+    """
+
+    builtins = [style for style in workbook._named_styles if style.builtinId == 0]
+    if len(builtins) == 1:
+        return builtins[0]
+    if not builtins:
+        named = [style for style in workbook._named_styles if style.name == "Normal"]
+        if len(named) == 1:
+            return named[0]
+    raise TemplateCompilationError(
+        (
+            Diagnostic(
+                DiagnosticCode.XLSX_NORMAL_STYLE_UNIDENTIFIABLE,
+                "workbook has no unambiguous Normal cell style",
+                SourceLocation("<workbook>", "A1"),
+            ),
+        )
+    )
+
+
+def _normal_style_presentation(style: NamedStyle) -> NormalStylePresentation:
+    """Detach the Normal style from its source workbook.
+
+    Args:
+        style: Loaded and workbook-bound Normal style.
+
+    Returns:
+        Presentation components independent of the source workbook.
+    """
+
+    return NormalStylePresentation(
+        font=copy(style.font),
+        fill=copy(style.fill),
+        border=copy(style.border),
+        alignment=copy(style.alignment),
+        number_format=cast(str, style.number_format),
+        protection=copy(style.protection),
+    )
+
+
 def _read_sheet(
     sheet: Worksheet,
     drawing_profiles: dict[str, _DrawingPartProfile],
@@ -812,6 +871,7 @@ def read_workbook(path: str | Path) -> WorkbookSnapshot:
             properties=copy(workbook.properties),
             loaded_theme=workbook.loaded_theme,
             default_cell_style=_cell_presentation(Cell(workbook.active)),
+            normal_style=_normal_style_presentation(_select_normal_style(workbook)),
         )
     finally:
         workbook.close()

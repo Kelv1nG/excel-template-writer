@@ -9,10 +9,15 @@ from zipfile import ZipFile
 import pytest
 from openpyxl import Workbook, load_workbook
 from openpyxl.cell.cell import Cell
-from openpyxl.styles import Alignment, Border, Font, PatternFill, Protection, Side
+from openpyxl.styles import Alignment, Border, Font, NamedStyle, PatternFill, Protection, Side
 from openpyxl.styles.cell_style import StyleArray
 from openpyxl.utils.indexed_list import IndexedList
 
+from excel_template_writer.diagnostics import (
+    DiagnosticCode,
+    SourceLocation,
+    TemplateCompilationError,
+)
 from excel_template_writer.xlsx import render_workbook
 
 NS = {"s": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
@@ -54,6 +59,160 @@ def _default_cell(workbook: Workbook) -> Cell:
 def _sheet_xml(path: Path) -> ElementTree.Element:
     with ZipFile(path) as archive:
         return ElementTree.fromstring(archive.read("xl/worksheets/sheet1.xml"))
+
+
+def _style_fill(path: Path, *, normal: bool) -> tuple[str | None, str | None]:
+    with ZipFile(path) as archive:
+        styles = ElementTree.fromstring(archive.read("xl/styles.xml"))
+    if normal:
+        named_styles = styles.find("s:cellStyles", NS)
+        style_xfs = styles.find("s:cellStyleXfs", NS)
+        assert named_styles is not None and style_xfs is not None
+        normal_ref = next(style for style in named_styles if style.get("builtinId") == "0")
+        xf_id = normal_ref.get("xfId")
+        assert xf_id is not None
+        xf = style_xfs[int(xf_id)]
+    else:
+        cell_xfs = styles.find("s:cellXfs", NS)
+        assert cell_xfs is not None
+        xf = cell_xfs[0]
+    fills = styles.find("s:fills", NS)
+    assert fills is not None
+    fill = fills[int(xf.get("fillId", "0"))]
+    pattern = fill.find("s:patternFill", NS)
+    assert pattern is not None
+    color = pattern.find("s:fgColor", NS)
+    return pattern.get("patternType"), None if color is None else color.get("rgb")
+
+
+@pytest.mark.parametrize("default_white", [True, False])
+def test_preserves_normal_style_independently_of_default_cell_xf(
+    tmp_path: Path, default_white: bool
+) -> None:
+    template, output = tmp_path / "template.xlsx", tmp_path / "output.xlsx"
+    workbook = Workbook()
+    if default_white:
+        _set_default(workbook)
+    workbook._named_styles[0].fill = PatternFill("solid", fgColor="FFFFFFFF")
+    workbook.active.sheet_view.showGridLines = True
+    workbook.active["A1"] = "{{ title }}"
+    workbook.save(template)
+    workbook.close()
+
+    render_workbook(template, output, {"title": "Report"})
+
+    expected_default = ("solid", "FFFFFFFF") if default_white else (None, None)
+    for path in (template, output):
+        assert _style_fill(path, normal=True) == ("solid", "FFFFFFFF")
+        assert _style_fill(path, normal=False) == expected_default
+        assert _sheet_xml(path).find(".//s:c[@r='B2']", NS) is None
+        reopened = load_workbook(path)
+        try:
+            assert reopened.active.sheet_view.showGridLines is True
+        finally:
+            reopened.close()
+
+
+def test_preserves_custom_normal_style_components(tmp_path: Path) -> None:
+    template, output = tmp_path / "template.xlsx", tmp_path / "output.xlsx"
+    workbook = Workbook()
+    normal = workbook._named_styles[0]
+    normal.font = Font(name="Arial", size=14, bold=True, color="FF123456")
+    normal.fill = PatternFill("solid", fgColor="FFFFFFFF")
+    normal.border = Border(bottom=Side(style="thin", color="FF112233"))
+    normal.alignment = Alignment(horizontal="center", wrap_text=True)
+    normal.number_format = '0.0000 "units"'
+    normal.protection = Protection(locked=False, hidden=True)
+    workbook.active["A1"] = "{{ title }}"
+    workbook.save(template)
+    workbook.close()
+
+    render_workbook(template, output, {"title": "Report"})
+
+    rendered = load_workbook(output)
+    try:
+        normal = rendered._named_styles[0]
+        assert normal.font.name == "Arial" and normal.font.sz == 14
+        assert normal.font.bold is True and normal.font.color.rgb == "FF123456"
+        assert normal.fill.patternType == "solid" and normal.fill.fgColor.rgb == "FFFFFFFF"
+        assert normal.border.bottom.style == "thin"
+        assert normal.border.bottom.color.rgb == "FF112233"
+        assert normal.alignment.horizontal == "center" and normal.alignment.wrap_text is True
+        assert normal.number_format == '0.0000 "units"'
+        assert normal.protection.locked is False and normal.protection.hidden is True
+    finally:
+        rendered.close()
+
+
+def test_normal_style_does_not_change_per_sheet_gridline_settings(tmp_path: Path) -> None:
+    template, output = tmp_path / "template.xlsx", tmp_path / "output.xlsx"
+    workbook = Workbook()
+    workbook._named_styles[0].fill = PatternFill("solid", fgColor="FFFFFFFF")
+    workbook.active.title = "Report"
+    workbook.active.sheet_view.showGridLines = True
+    workbook.active["A1"] = "{{ title }}"
+    notes = workbook.create_sheet("Notes")
+    notes.sheet_view.showGridLines = False
+    notes["A1"] = "Read me"
+    workbook.save(template)
+    workbook.close()
+
+    render_workbook(template, output, {"title": "Report"})
+
+    rendered = load_workbook(output)
+    try:
+        assert rendered["Report"].sheet_view.showGridLines is True
+        assert rendered["Notes"].sheet_view.showGridLines is False
+        assert _style_fill(output, normal=True) == ("solid", "FFFFFFFF")
+    finally:
+        rendered.close()
+
+
+def test_preserves_named_normal_when_builtin_id_is_absent(tmp_path: Path) -> None:
+    template, output = tmp_path / "template.xlsx", tmp_path / "output.xlsx"
+    workbook = Workbook()
+    normal = workbook._named_styles[0]
+    normal.builtinId = None
+    normal.fill = PatternFill("solid", fgColor="FFFFFFFF")
+    workbook.active["A1"] = "{{ title }}"
+    workbook.save(template)
+    workbook.close()
+
+    render_workbook(template, output, {"title": "Report"})
+
+    rendered = load_workbook(output)
+    try:
+        assert rendered.active["A1"].value == "Report"
+        assert rendered._named_styles[0].fill.patternType == "solid"
+        assert rendered._named_styles[0].fill.fgColor.rgb == "FFFFFFFF"
+    finally:
+        rendered.close()
+
+
+@pytest.mark.parametrize("case", ["missing", "ambiguous"])
+def test_rejects_unidentifiable_normal_style_without_publishing(tmp_path: Path, case: str) -> None:
+    template, output = tmp_path / "template.xlsx", tmp_path / "output.xlsx"
+    workbook = Workbook()
+    if case == "missing":
+        workbook._named_styles[0].name = "Custom"
+        workbook._named_styles[0].builtinId = None
+    else:
+        workbook.add_named_style(NamedStyle(name="Duplicate Normal", builtinId=0))
+    workbook.active["A1"] = "{{ title }}"
+    workbook.save(template)
+    workbook.close()
+
+    with pytest.raises(TemplateCompilationError) as error:
+        render_workbook(template, output, {"title": "Report"})
+
+    assert DiagnosticCode.XLSX_NORMAL_STYLE_UNIDENTIFIABLE in {
+        item.code for item in error.value.diagnostics
+    }
+    location = error.value.diagnostics[0].location
+    assert isinstance(location, SourceLocation)
+    assert location.sheet == "<workbook>"
+    assert location.cell == "A1"
+    assert not output.exists()
 
 
 @pytest.mark.parametrize("rich", [False, True])
@@ -120,6 +279,8 @@ def test_preserves_workbook_default_without_materializing_blank_background(
         rendered.close()
     for path in (template, output):
         xml = _sheet_xml(path)
+        assert _style_fill(path, normal=True) == (None, None)
+        assert _style_fill(path, normal=False) == ("solid", "FFFFFFFF")
         assert not xml.findall(".//s:c[@r='B2']", NS)
         assert not xml.findall(".//s:c[@r='H5']", NS)
         assert all("s" not in row.attrib for row in xml.findall("s:sheetData/s:row", NS))
@@ -130,6 +291,7 @@ def test_preserves_explicit_no_fill_cells_and_dimensions_over_white_default(tmp_
     template, output = tmp_path / "template.xlsx", tmp_path / "output.xlsx"
     workbook = Workbook()
     _set_default(workbook)
+    workbook._named_styles[0].fill = PatternFill("solid", fgColor="FFFFFFFF")
     sheet = workbook.active
     sheet["A1"] = "{{ title }}"
     sheet["A1"]._style = copy(workbook._cell_styles[0])
