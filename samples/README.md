@@ -69,10 +69,10 @@ their exact authored spacing remain visible. Its generator also renders temporar
 formatted blank plus nonfatal `W1301` diagnostics.
 
 The `default_cell_style` pair keeps gridlines enabled and the worksheet zoom at 80%. Its blank band
-`B6:H11` has no individual cell records and inherits white from the workbook default style
-(`cellXfs[0]`). The generator checks the saved OOXML default and the absent coordinates, then
-verifies zoom, direct white-fill and explicit no-fill controls, plus all 3/2/4 rendered table rows
-after reload.
+`B6:H11` has no individual cell records and inherits white from the workbook default cell format
+(`cellXfs[0]`) and built-in Normal style (`cellStyleXfs`). The generator checks both saved OOXML
+definitions and the absent coordinates, then verifies zoom, direct white-fill and explicit no-fill
+controls, plus all 3/2/4 rendered table rows after reload.
 
 ## Required sample coverage for new features
 

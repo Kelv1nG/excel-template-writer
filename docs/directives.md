@@ -165,8 +165,9 @@ Decimals and Decimals deliberately rendered as text are not subject to this boun
 
 The renderer never implicitly rounds or converts an unsupported amount to text. Callers own
 rounding and preprocessing, including any result columns computed in Polars. Errors `E3203`–`E3205`
-identify every affected rendered worksheet/cell. Compatibility errors `E3206`–`E3207` identify
-`<workbook>!A1`. Any of these errors leaves an absent output absent or an existing output unchanged.
+identify every affected rendered worksheet/cell. Compatibility errors `E3206`–`E3207` and Normal
+style error `E3208` identify `<workbook>!A1`. Any of these errors leaves an absent output absent or
+an existing output unchanged.
 
 ### Expression features
 
@@ -795,6 +796,7 @@ compilation. Loops accept `rows`, `cells`, or `none`; regions accept only `rows`
 | `E3205` | Round-trip-safe numeric token does not equal the Decimal amount |
 | `E3206` | Installed OpenPyXL version is not certified |
 | `E3207` | Numeric serializer hook, ownership, activation, or behavioral self-test failed |
+| `E3208` | Source workbook has no unambiguous Normal cell style |
 
 Diagnostics include at least the worksheet and cell, and lexical diagnostics also carry character offsets.
 Context diagnostics instead carry a canonical input path beginning with `context`.

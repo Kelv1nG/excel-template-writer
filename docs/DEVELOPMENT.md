@@ -97,10 +97,12 @@ assert its stable diagnostic code and either its source location or canonical co
   and border properties after save/reload at representative rendered, directive-only, formatted
   blank, shifted, and unaffected cells. Also verify the effective workbook default style for
   absent blank cells, including row/column overrides, and retain explicit no-fill overrides
-  alongside directly filled controls. Value-only assertions do not prove presentation
-  preservation and can miss cells that silently revert to Excel's default appearance. Inspect
-  the saved default style and cell records in OOXML when synthesized blank cells in the public
-  workbook model cannot prove the effective appearance.
+  alongside directly filled controls. When Normal is customized, inspect both `cellXfs[0]` and
+  the built-in Normal entry in `cellStyleXfs`; checking only one missed a visible gridline
+  regression. Value-only assertions do not prove presentation preservation and can miss cells
+  that silently revert to Excel's default appearance. Inspect saved style definitions and cell
+  records in OOXML when synthesized blank cells in the public workbook model cannot prove the
+  effective appearance.
 - Inspect OOXML parts only when the public workbook model cannot prove the behavior.
 
 Numeric fidelity tests distinguish stored tokens from reader interpretation. Every finite built-in

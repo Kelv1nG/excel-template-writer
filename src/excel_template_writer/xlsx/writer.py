@@ -30,6 +30,7 @@ from excel_template_writer.xlsx.model import (
     ColumnPresentation,
     DimensionPresentation,
     ImageSnapshot,
+    NormalStylePresentation,
     RowPresentation,
     SheetFeaturePlan,
     SheetSnapshot,
@@ -81,6 +82,23 @@ def _preserve_explicit_zero_style(destination: Cell | RowDimension | ColumnDimen
         baseline.hidden = True
         workbook.add_named_style(baseline)
     destination._style = copy(workbook._named_styles[name].as_tuple())
+
+
+def _apply_normal_style(workbook: Workbook, source: NormalStylePresentation) -> None:
+    """Restore the authored Normal style after zero-style overrides are placed.
+
+    Args:
+        workbook: Destination workbook with cells and dimensions already written.
+        source: Detached presentation of the template's built-in Normal style.
+    """
+
+    normal = next(style for style in workbook._named_styles if style.builtinId == 0)
+    normal.font = copy(source.font)
+    normal.fill = copy(source.fill)
+    normal.border = copy(source.border)
+    normal.alignment = copy(source.alignment)
+    normal.number_format = source.number_format
+    normal.protection = copy(source.protection)
 
 
 class _PreservedImage(Image):
@@ -771,6 +789,7 @@ def write_workbook(
     ):
         destination = workbook.create_sheet(sheet.template.name)
         _write_sheet(destination, sheet, plan, feature_plan)
+    _apply_normal_style(workbook, snapshot.normal_style)
 
     handle, temporary_name = tempfile.mkstemp(suffix=".xlsx", dir=path.parent)
     os.close(handle)

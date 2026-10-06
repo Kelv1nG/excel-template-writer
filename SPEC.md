@@ -737,7 +737,10 @@ The renderer does not select a number format from a variable name or runtime typ
 
 Styles should be reused/deduplicated where possible to prevent excessive workbook style records.
 The first production adapter guarantees the effective cell appearance, not preservation of named
-style authoring identity.
+style authoring identity. Unmaterialized blank cells retain the source workbook's effective default
+appearance, including a customized built-in Normal style, without creating individual cell records.
+The adapter identifies Normal by a unique built-in ID of 0, or by a unique name of `Normal` when
+that ID is absent. A missing or ambiguous Normal style fails before writing the output.
 
 ### 13.2 Row and column dimensions
 
@@ -1157,7 +1160,7 @@ Examples:
 - `E2104 MERGE_CROSSES_BLOCK_BOUNDARY`
 - `E3101 FORMULA_REQUIRES_UNSUPPORTED_TRANSFORM`
 
-The XLSX numeric-output boundary reserves these stable render-error diagnostics:
+The XLSX adapter reserves these stable diagnostics:
 
 | Code | Name | Location | Meaning |
 | --- | --- | --- | --- |
@@ -1166,6 +1169,7 @@ The XLSX numeric-output boundary reserves these stable render-error diagnostics:
 | E3205 | XLSX_DECIMAL_INEXACT | Rendered worksheet and cell | The round-trip-safe binary64 token is not numerically equal to the Decimal amount. |
 | E3206 | XLSX_OPENPYXL_COMPAT_UNVERIFIED | `<workbook>!A1` | Installed OpenPyXL version is not certified. |
 | E3207 | XLSX_OPENPYXL_COMPAT_FAILED | `<workbook>!A1` | The expected hook, ownership check, in-memory activation, or behavioral self-test failed. |
+| E3208 | XLSX_NORMAL_STYLE_UNIDENTIFIABLE | `<workbook>!A1` | The source workbook has no unambiguous Normal cell style. |
 
 Decimal errors are `TemplateRenderError` diagnostics located at every affected rendered
 destination, including repeated cells. Their messages identify the rejected value category
@@ -1174,6 +1178,7 @@ E3207 identifies the failed check, while E3206 distinguishes an uncertified depe
 Existing `E1505 NON_FINITE_CONTEXT_NUMBER` and `E1307 NON_FINITE_EXPRESSION_NUMBER` remain
 authoritative for non-finite values, with no duplicate XLSX error. Every E3203-E3207 error prevents
 publication under section 15.9's absent-or-unchanged destination rule.
+E3208 is a template-compilation error and follows the same publication rule.
 
 `E1401` covers both competing planned allocations and an occupied `shift="none"` destination; the
 diagnostic location is the obstructing destination cell. `E2104` also covers a no-shift footprint
