@@ -168,6 +168,55 @@ def test_normal_style_does_not_change_per_sheet_gridline_settings(tmp_path: Path
         rendered.close()
 
 
+@pytest.mark.parametrize("items", [[], ["one", "two", "three"]])
+def test_static_blank_fills_above_repeat_keep_white_and_vertical_borders(
+    tmp_path: Path, items: list[str]
+) -> None:
+    template, output = tmp_path / "template.xlsx", tmp_path / "output.xlsx"
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.sheet_view.showGridLines = True
+    sheet["A2"] = "Notes"
+    sheet["A6"] = "{% for item in items %}"
+    sheet["B6"] = "{{ item }}"
+    sheet["C6"] = "{% endfor %}"
+    white = PatternFill("solid", fgColor="FFFFFFFF")
+    for address in ("A2", "B2", "C2", "D2", "F2"):
+        sheet[address].fill = white
+    vertical = Border(
+        left=Side(style="thin", color="FF888888"),
+        right=Side(style="thin", color="FF888888"),
+    )
+    sheet["D2"].border = vertical
+    sheet["E2"].border = vertical  # Authored no-fill gap between white cells.
+    workbook.save(template)
+    workbook.close()
+
+    render_workbook(template, output, {"items": items})
+
+    for path in (template, output):
+        reopened = load_workbook(path)
+        try:
+            result = reopened.active
+            assert result.sheet_view.showGridLines is True
+            assert result["A2"].value == "Notes"
+            for address in ("A2", "B2", "C2", "D2", "F2"):
+                assert result[address].fill.patternType == "solid"
+                assert result[address].fill.fgColor.rgb == "FFFFFFFF"
+            assert result["D2"].border.left.style == "thin"
+            assert result["D2"].border.right.style == "thin"
+            assert result["E2"].fill.patternType is None
+            assert result["E2"].border.left.style == "thin"
+            assert result["E2"].border.right.style == "thin"
+        finally:
+            reopened.close()
+    rendered = load_workbook(output)
+    try:
+        assert [rendered.active[f"B{row}"].value for row in range(6, 6 + len(items))] == items
+    finally:
+        rendered.close()
+
+
 def test_preserves_named_normal_when_builtin_id_is_absent(tmp_path: Path) -> None:
     template, output = tmp_path / "template.xlsx", tmp_path / "output.xlsx"
     workbook = Workbook()
