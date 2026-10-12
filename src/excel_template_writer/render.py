@@ -492,10 +492,27 @@ class _Renderer:
                 node.span.location,
             )
         rectangle = node.rectangle
+        reserved_cells = rectangle.height * rectangle.width if node.shift == "none" else 0
+        self.check_block_limits(
+            cells=reserved_cells,
+            height=rectangle.height,
+            width=rectangle.width,
+            location=node.span.location,
+        )
         cells: dict[Coordinate, PlannedCell] = {}
         for source_coordinate, source_value in self.compiled.template.cells.items():
             if not rectangle.contains_coordinate(source_coordinate):
                 continue
+            if (
+                preserve
+                and isinstance(source_value, str)
+                and len(source_value) > XLSX_MAX_CELL_TEXT_LENGTH
+            ):
+                self.resource_limit(
+                    DiagnosticCode.CELL_TEXT_LIMIT_EXCEEDED,
+                    f"cell text exceeds the XLSX limit of {XLSX_MAX_CELL_TEXT_LENGTH:,} characters",
+                    SourceLocation(self.compiled.template.name, source_coordinate.a1),
+                )
             local = Coordinate(
                 source_coordinate.row - rectangle.top + 1,
                 source_coordinate.column - rectangle.left + 1,
@@ -507,6 +524,13 @@ class _Renderer:
                 path,
                 source_coordinate,
                 source_value is None,
+            )
+        if node.shift != "none":
+            self.check_block_limits(
+                cells=len(cells),
+                height=rectangle.height,
+                width=rectangle.width,
+                location=node.span.location,
             )
         rows = {
             local_row: PlannedRow(local_row, rectangle.top + local_row - 1, path)
@@ -529,12 +553,6 @@ class _Renderer:
             }
             if node.shift == "none"
             else set()
-        )
-        self.check_block_limits(
-            cells=max(len(cells), len(reservations)),
-            height=rectangle.height,
-            width=rectangle.width,
-            location=node.span.location,
         )
         return _Block(cells, rows, merges, reservations, rectangle.height, rectangle.width)
 

@@ -12,7 +12,7 @@ from excel_template_writer.limits import (
     XLSX_MAX_ROWS,
     ResourceLimits,
 )
-from excel_template_writer.model import WorksheetTemplate
+from excel_template_writer.model import Coordinate, WorksheetTemplate
 from excel_template_writer.render import render_sheet
 from excel_template_writer.values import normalize_context
 
@@ -140,6 +140,63 @@ def test_no_shift_reserved_footprint_counts_toward_the_planned_cell_limit() -> N
 
     assert result.plan is None
     assert result.diagnostics[0].code is DiagnosticCode.RENDER_RESOURCE_LIMIT_EXCEEDED
+
+
+def test_unavailable_no_shift_repeat_checks_footprint_before_allocating_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    template = WorksheetTemplate.from_cells(
+        "Report",
+        {
+            "A1": '{% for item in missing shift="none" %}',
+            "CV100": "{% endfor %}",
+        },
+    )
+    compiled = compile_sheet(template).require()
+    constructed = 0
+
+    def guarded_coordinate(row: int, column: int) -> Coordinate:
+        nonlocal constructed
+        constructed += 1
+        assert constructed < 50, "reservation exceeded the cell limit before validation"
+        return Coordinate(row, column)
+
+    monkeypatch.setattr("excel_template_writer.render.Coordinate", guarded_coordinate)
+    result = render_sheet(
+        compiled,
+        {},
+        missing_output="blank",
+        limits=ResourceLimits(max_planned_cells_per_sheet=2),
+    )
+
+    assert result.plan is None
+    assert any(
+        diagnostic.code is DiagnosticCode.RENDER_RESOURCE_LIMIT_EXCEEDED
+        for diagnostic in result.diagnostics
+    )
+
+
+def test_preserved_unavailable_repeat_enforces_excel_cell_text_limit() -> None:
+    template = WorksheetTemplate.from_cells(
+        "Report",
+        {
+            "A1": "{% for item in missing %}",
+            "B1": "x" * (XLSX_MAX_CELL_TEXT_LENGTH + 1),
+            "C1": "{% endfor %}",
+        },
+    )
+
+    result = render_sheet(
+        compile_sheet(template).require(),
+        {},
+        missing_output="preserve",
+    )
+
+    assert result.plan is None
+    assert any(
+        diagnostic.code is DiagnosticCode.CELL_TEXT_LIMIT_EXCEEDED
+        for diagnostic in result.diagnostics
+    )
 
 
 def test_output_dimensions_and_excel_text_have_independent_hard_limits() -> None:
