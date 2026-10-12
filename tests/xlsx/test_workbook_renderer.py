@@ -607,6 +607,127 @@ def test_render_workbook_rejects_an_unknown_missing_output_policy(tmp_path: Path
         )
 
 
+def _make_unavailable_repeat_workbook(path: Path, *, fatal_neighbor: bool = False) -> None:
+    """Write a styled two-row repeat whose collection is supplied by the test.
+
+    Args:
+        path: Template path to write.
+        fatal_neighbor: Include an independent division-by-zero output.
+    """
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Report"
+    sheet["A1"] = "Header"
+    sheet["A2"] = "{% for row in rows %}{{ row.name }}"
+    sheet.merge_cells("B2:C2")
+    sheet["B2"] = None
+    sheet["A3"] = "Static"
+    sheet["B3"] = "{{ row.amount }}"
+    sheet["C3"] = "{% endfor %}"
+    sheet["A4"] = "Footer"
+    sheet["D2"] = "Neighbor"
+    if fatal_neighbor:
+        sheet["D3"] = "{{ 1 / 0 }}"
+    sheet["A2"].fill = PatternFill("solid", fgColor="FFBDD7EE")
+    sheet["B2"].fill = PatternFill("solid", fgColor="FFFFF2CC")
+    sheet["B2"].border = Border(bottom=Side(style="double", color="FF000000"))
+    sheet["C3"].fill = PatternFill("solid", fgColor="FFE2F0D9")
+    sheet["B3"].number_format = "$#,##0.00"
+    sheet.row_dimensions[2].height = 30
+    sheet.row_dimensions[3].height = 22
+    sheet.column_dimensions["B"].width = 24
+    sheet.column_dimensions["D"].width = 19
+    _save(workbook, path)
+    workbook.close()
+
+
+@pytest.mark.parametrize(
+    ("context", "expected_code"),
+    [
+        ({}, DiagnosticCode.MISSING_VALUE_RENDERED),
+        ({"rows": None}, DiagnosticCode.NULL_COLLECTION_RENDERED),
+    ],
+    ids=["missing", "null"],
+)
+@pytest.mark.parametrize("missing_output", ["blank", "preserve"])
+def test_render_workbook_recovers_unavailable_repeat_with_presentation(
+    tmp_path: Path,
+    context: dict[str, object],
+    expected_code: DiagnosticCode,
+    missing_output: str,
+) -> None:
+    template_path = tmp_path / "unavailable-template.xlsx"
+    output_path = tmp_path / "unavailable-output.xlsx"
+    _make_unavailable_repeat_workbook(template_path)
+
+    result = render_workbook(template_path, output_path, context, missing_output=missing_output)
+
+    assert [diagnostic.code for diagnostic in result.diagnostics] == [expected_code]
+    assert result.diagnostics[0].severity is DiagnosticSeverity.WARNING
+    assert str(result.diagnostics[0].location) == "Report!A2:0"
+    output = load_workbook(output_path, data_only=False)
+    try:
+        sheet = output["Report"]
+        assert sheet["A1"].value == "Header"
+        assert sheet["D2"].value == "Neighbor"
+        assert sheet["A4"].value == "Footer"
+        if missing_output == "blank":
+            assert [sheet[coordinate].value for coordinate in ("A2", "B2", "A3", "B3", "C3")] == [
+                None,
+                None,
+                None,
+                None,
+                None,
+            ]
+        else:
+            assert sheet["A2"].value == "{% for row in rows %}{{ row.name }}"
+            assert sheet["A3"].value == "Static"
+            assert sheet["B3"].value == "{{ row.amount }}"
+            assert sheet["C3"].value == "{% endfor %}"
+            assert all(sheet[coordinate].data_type == "s" for coordinate in ("A2", "B3", "C3"))
+        assert {str(merge) for merge in sheet.merged_cells.ranges} == {"B2:C2"}
+        assert sheet["A2"].fill.fgColor.rgb == "FFBDD7EE"
+        assert sheet["B2"].fill.fgColor.rgb == "FFFFF2CC"
+        assert sheet["B2"].border.bottom.style == "double"
+        assert sheet["C3"].fill.fgColor.rgb == "FFE2F0D9"
+        assert sheet["B3"].number_format == "$#,##0.00"
+        assert [sheet.row_dimensions[row].height for row in (2, 3)] == [30, 22]
+        assert [sheet.column_dimensions[column].width for column in ("B", "D")] == [24, 19]
+    finally:
+        output.close()
+    authored = load_workbook(template_path)
+    try:
+        assert authored["Report"]["A2"].value == "{% for row in rows %}{{ row.name }}"
+    finally:
+        authored.close()
+
+
+@pytest.mark.parametrize("missing_output", ["error", "blank", "preserve"])
+def test_unavailable_repeat_publishes_nothing_when_an_error_remains(
+    tmp_path: Path, missing_output: str
+) -> None:
+    template_path = tmp_path / "unavailable-template.xlsx"
+    output_path = tmp_path / "unavailable-output.xlsx"
+    _make_unavailable_repeat_workbook(template_path, fatal_neighbor=True)
+    existing = Workbook()
+    existing.active["A1"] = "Existing destination"
+    _save(existing, output_path)
+    existing.close()
+    original_bytes = output_path.read_bytes()
+
+    with pytest.raises(TemplateRenderError) as captured:
+        render_workbook(template_path, output_path, {}, missing_output=missing_output)
+
+    codes = {diagnostic.code for diagnostic in captured.value.diagnostics}
+    assert DiagnosticCode.DIVISION_BY_ZERO in codes
+    if missing_output == "error":
+        assert DiagnosticCode.MISSING_VALUE in codes
+    else:
+        assert DiagnosticCode.MISSING_VALUE_RENDERED in codes
+    assert output_path.read_bytes() == original_bytes
+
+
 def test_render_workbook_copies_values_direct_styles_styled_blanks_and_dimensions(
     tmp_path: Path,
 ) -> None:
