@@ -245,21 +245,15 @@ def test_tolerated_missing_output_does_not_hide_an_independent_fatal_error() -> 
 
 
 @pytest.mark.parametrize(
-    "source",
-    [
-        "{% for item in missing_items %}{{ item }}{% endfor %}",
-        "{% if missing_condition %}Shown{% endif %}",
-    ],
-)
-@pytest.mark.parametrize(
     "missing_output",
     [MissingOutputPolicy.BLANK, MissingOutputPolicy.PRESERVE],
 )
-def test_missing_structural_expression_remains_fatal(
-    source: str,
+def test_missing_condition_remains_fatal(
     missing_output: MissingOutputPolicy,
 ) -> None:
-    template = WorksheetTemplate.from_rows("Report", [[source]])
+    template = WorksheetTemplate.from_rows(
+        "Report", [["{% if missing_condition %}Shown{% endif %}"]]
+    )
     compiled = compile_sheet(template).require()
 
     result = render_sheet(compiled, {}, missing_output=missing_output)
@@ -342,3 +336,94 @@ def test_null_collection_filter_recovers_only_its_mixed_cell_segment(
 
     assert _values_by_coordinate(result.require()) == {"A1": expected}
     assert [diagnostic.code.value for diagnostic in result.diagnostics] == ["W1302"]
+
+
+@pytest.mark.parametrize("context", [{}, {"tables": {}}], ids=["missing-root", "missing-key"])
+@pytest.mark.parametrize(
+    ("missing_output", "expected_code"),
+    [
+        (MissingOutputPolicy.ERROR, "E1301"),
+        (MissingOutputPolicy.BLANK, "W1301"),
+        (MissingOutputPolicy.PRESERVE, "W1301"),
+    ],
+)
+def test_missing_repeat_collection_recovers_its_complete_source_rectangle(
+    context: dict[str, object], missing_output: MissingOutputPolicy, expected_code: str
+) -> None:
+    opening = '{% for row in tables["some_table"] %}{{ row.name }}'
+    closing = "{{ row.amount }}{% endfor %}"
+    template = WorksheetTemplate.from_rows(
+        "Report",
+        [
+            ["Header", None, None],
+            [opening, "Static", "Neighbor"],
+            ["Inner", closing, None],
+            ["Footer", None, None],
+        ],
+    )
+    compiled = compile_sheet(template).require()
+
+    result = render_sheet(compiled, context, missing_output=missing_output)
+
+    if missing_output is MissingOutputPolicy.ERROR:
+        assert result.plan is None
+    else:
+        expected_inner = (
+            {"A2": None, "B2": None, "A3": None, "B3": None}
+            if missing_output is MissingOutputPolicy.BLANK
+            else {"A2": opening, "B2": "Static", "A3": "Inner", "B3": closing}
+        )
+        assert _values_by_coordinate(result.require()) == {
+            "A1": "Header",
+            **expected_inner,
+            "C2": "Neighbor",
+            "A4": "Footer",
+        }
+        assert result.require().height == 4
+    assert [diagnostic.code.value for diagnostic in result.diagnostics] == [expected_code]
+    assert str(result.diagnostics[0].location) == "Report!A2:0"
+
+
+@pytest.mark.parametrize(
+    ("missing_output", "expected_code", "expected"),
+    [
+        (MissingOutputPolicy.ERROR, "E1303", None),
+        (MissingOutputPolicy.BLANK, "W1302", None),
+        (
+            MissingOutputPolicy.PRESERVE,
+            "W1302",
+            "{% for item in items %}{{ item }}{% endfor %}",
+        ),
+    ],
+)
+def test_present_null_repeat_collection_uses_its_own_recovery_warning(
+    missing_output: MissingOutputPolicy, expected_code: str, expected: str | None
+) -> None:
+    source = "{% for item in items %}{{ item }}{% endfor %}"
+    compiled = compile_sheet(WorksheetTemplate.from_rows("Report", [[source]])).require()
+
+    result = render_sheet(compiled, {"items": None}, missing_output=missing_output)
+
+    if missing_output is MissingOutputPolicy.ERROR:
+        assert result.plan is None
+    else:
+        assert _values_by_coordinate(result.require()) == {"A1": expected}
+    assert [diagnostic.code.value for diagnostic in result.diagnostics] == [expected_code]
+    assert str(result.diagnostics[0].location) == "Report!A1:0"
+
+
+@pytest.mark.parametrize(
+    "missing_output", [MissingOutputPolicy.BLANK, MissingOutputPolicy.PRESERVE]
+)
+def test_wrong_non_null_repeat_collection_remains_fatal(
+    missing_output: MissingOutputPolicy,
+) -> None:
+    source = "{% for item in items %}{{ item }}{% endfor %}"
+    compiled = compile_sheet(WorksheetTemplate.from_rows("Report", [[source]])).require()
+
+    result = render_sheet(compiled, {"items": 7}, missing_output=missing_output)
+
+    assert result.plan is None
+    assert [diagnostic.code for diagnostic in result.diagnostics] == [
+        DiagnosticCode.EXPECTED_COLLECTION
+    ]

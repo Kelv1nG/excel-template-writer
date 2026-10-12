@@ -3,8 +3,10 @@ from decimal import Decimal
 
 import pytest
 
+from excel_template_writer import MissingOutputPolicy
 from excel_template_writer.compiler import compile_sheet
 from excel_template_writer.diagnostics import DiagnosticCode
+from excel_template_writer.limits import ResourceLimits
 from excel_template_writer.model import Coordinate, Rectangle, WorksheetTemplate
 from excel_template_writer.render import RenderPlan, render_sheet
 from excel_template_writer.values import TypeAdapter
@@ -82,6 +84,133 @@ def test_empty_collection_keeps_one_blank_formatted_instance() -> None:
 
     assert _values_by_coordinate(plan) == {"A1": None, "B1": "Fixed"}
     assert plan.height == 1
+
+
+@pytest.mark.parametrize("shift", ["rows", "cells", "none"])
+@pytest.mark.parametrize(
+    "missing_output", [MissingOutputPolicy.BLANK, MissingOutputPolicy.PRESERVE]
+)
+def test_unavailable_repeat_keeps_identity_geometry_and_provenance(
+    shift: str, missing_output: MissingOutputPolicy
+) -> None:
+    opening = f'{{% for row in missing shift="{shift}" %}}{{{{ row.name }}}}'
+    closing = "{% endfor %}"
+    template = WorksheetTemplate(
+        "Report",
+        {
+            Coordinate(1, 1): "Top",
+            Coordinate(2, 1): opening,
+            Coordinate(2, 2): None,
+            Coordinate(2, 4): "Neighbor",
+            Coordinate(3, 1): "Static",
+            Coordinate(3, 3): closing,
+            Coordinate(4, 1): "Footer",
+        },
+        (Rectangle(2, 2, 2, 3),),
+    )
+    compiled = compile_sheet(template).require()
+
+    plan = render_sheet(compiled, {}, missing_output=missing_output).require()
+
+    inner = (
+        {"A2": None, "B2": None, "A3": None, "C3": None}
+        if missing_output is MissingOutputPolicy.BLANK
+        else {"A2": opening, "B2": None, "A3": "Static", "C3": closing}
+    )
+    assert _values_by_coordinate(plan) == {
+        "A1": "Top",
+        **inner,
+        "D2": "Neighbor",
+        "A4": "Footer",
+    }
+    assert plan.height == 4
+    assert [(row.destination_row, row.source_row) for row in plan.rows] == [
+        (1, 1),
+        (2, 2),
+        (3, 3),
+        (4, 4),
+    ]
+    assert [merge.rectangle for merge in plan.merges] == [Rectangle(2, 2, 2, 3)]
+    assert all(cell.presentation_coordinate == cell.source_coordinate for cell in plan.cells)
+
+
+def test_unavailable_child_repeat_recovers_once_per_parent_without_evaluating_body() -> None:
+    template = WorksheetTemplate.from_rows(
+        "Report",
+        [
+            ["{% for group in groups %}{{ group.name }}", None],
+            ["{% for item in group.items %}{{ item.name }}", "{{ absent }}{% endfor %}"],
+            ["End", "{% endfor %}"],
+        ],
+    )
+    compiled = compile_sheet(template).require()
+
+    result = render_sheet(
+        compiled,
+        {"groups": [{"name": "First"}, {"name": "Second"}]},
+        missing_output=MissingOutputPolicy.BLANK,
+    )
+
+    assert _values_by_coordinate(result.require()) == {
+        "A1": "First",
+        "A2": None,
+        "B2": None,
+        "A3": "End",
+        "B3": None,
+        "A4": "Second",
+        "A5": None,
+        "B5": None,
+        "A6": "End",
+        "B6": None,
+    }
+    assert [diagnostic.code for diagnostic in result.diagnostics] == [
+        DiagnosticCode.MISSING_VALUE_RENDERED,
+        DiagnosticCode.MISSING_VALUE_RENDERED,
+    ]
+    assert [str(diagnostic.location) for diagnostic in result.diagnostics] == [
+        "Report!A2:0",
+        "Report!A2:0",
+    ]
+
+
+def test_recovered_repeat_counts_toward_iteration_limit() -> None:
+    template = WorksheetTemplate.from_rows(
+        "Report",
+        [
+            ["{% for group in groups %}{{ group.name }}"],
+            ["{% for item in group.items %}{{ item }}{% endfor %}"],
+            ["{% endfor %}"],
+        ],
+    )
+    compiled = compile_sheet(template).require()
+
+    result = render_sheet(
+        compiled,
+        {"groups": [{"name": "First"}]},
+        missing_output=MissingOutputPolicy.PRESERVE,
+        limits=ResourceLimits(max_repeat_iterations_per_sheet=1),
+    )
+
+    assert result.plan is None
+    assert [diagnostic.code for diagnostic in result.diagnostics] == [
+        DiagnosticCode.RENDER_RESOURCE_LIMIT_EXCEEDED
+    ]
+
+
+def test_recovered_repeat_does_not_hide_an_independent_fatal_error() -> None:
+    template = WorksheetTemplate.from_rows(
+        "Report",
+        [["{% for item in missing %}{{ item }}{% endfor %}", "{{ 1 / 0 }}"]],
+    )
+    compiled = compile_sheet(template).require()
+
+    result = render_sheet(compiled, {}, missing_output=MissingOutputPolicy.BLANK)
+
+    assert result.plan is None
+    assert {diagnostic.code for diagnostic in result.diagnostics} == {
+        DiagnosticCode.MISSING_VALUE_RENDERED,
+        DiagnosticCode.DIVISION_BY_ZERO,
+    }
 
 
 def test_directive_only_boundary_cells_remain_material_after_tag_removal() -> None:

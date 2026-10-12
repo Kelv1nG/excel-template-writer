@@ -456,9 +456,87 @@ class _Renderer:
                 node.span.location,
             )
             return _EVALUATION_FAILED
+        except MissingValueError as error:
+            if isinstance(node, ForNode) and self.missing_output is not MissingOutputPolicy.ERROR:
+                return error
+            self.diagnostic(DiagnosticCode.MISSING_VALUE, str(error), node.span.location)
+            return _EVALUATION_FAILED
         except ExpressionEvaluationError as error:
             self.diagnostic(DiagnosticCode.MISSING_VALUE, str(error), node.span.location)
             return _EVALUATION_FAILED
+
+    def render_unavailable_repeat(
+        self,
+        node: ForNode,
+        path: tuple[int, ...],
+        *,
+        preserve: bool,
+    ) -> _Block:
+        """Plan one unchanged source-sized block for an unavailable collection.
+
+        Args:
+            node: Repeat whose collection is missing or null.
+            path: Recovered instance's lexical repeat path.
+            preserve: Keep exact authored cell values instead of blanking them.
+
+        Returns:
+            A local block with identity geometry and source presentation.
+        """
+
+        self.repeat_iterations += 1
+        if self.repeat_iterations > self.limits.max_repeat_iterations_per_sheet:
+            self.resource_limit(
+                DiagnosticCode.RENDER_RESOURCE_LIMIT_EXCEEDED,
+                "worksheet exceeds max_repeat_iterations_per_sheet="
+                f"{self.limits.max_repeat_iterations_per_sheet:,}",
+                node.span.location,
+            )
+        rectangle = node.rectangle
+        cells: dict[Coordinate, PlannedCell] = {}
+        for source_coordinate, source_value in self.compiled.template.cells.items():
+            if not rectangle.contains_coordinate(source_coordinate):
+                continue
+            local = Coordinate(
+                source_coordinate.row - rectangle.top + 1,
+                source_coordinate.column - rectangle.left + 1,
+            )
+            cells[local] = PlannedCell(
+                local,
+                source_value if preserve else None,
+                source_coordinate,
+                path,
+                source_coordinate,
+                source_value is None,
+            )
+        rows = {
+            local_row: PlannedRow(local_row, rectangle.top + local_row - 1, path)
+            for local_row in range(1, rectangle.height + 1)
+        }
+        merges = [
+            PlannedMerge(
+                merged.translated(rows=1 - rectangle.top, columns=1 - rectangle.left),
+                merged,
+                path,
+            )
+            for merged in self.compiled.template.merged_ranges
+            if rectangle.contains(merged)
+        ]
+        reservations = (
+            {
+                Coordinate(row, column)
+                for row in range(1, rectangle.height + 1)
+                for column in range(1, rectangle.width + 1)
+            }
+            if node.shift == "none"
+            else set()
+        )
+        self.check_block_limits(
+            cells=max(len(cells), len(reservations)),
+            height=rectangle.height,
+            width=rectangle.width,
+            location=node.span.location,
+        )
+        return _Block(cells, rows, merges, reservations, rectangle.height, rectangle.width)
 
     def shift_grid(
         self,
@@ -1073,6 +1151,42 @@ class _Renderer:
 
         if isinstance(node, ForNode):
             raw_items = self.evaluate_region_expression(node, scope)
+            if isinstance(raw_items, MissingValueError):
+                action = (
+                    "blanked" if self.missing_output is MissingOutputPolicy.BLANK else "preserved"
+                )
+                self.diagnostic(
+                    DiagnosticCode.MISSING_VALUE_RENDERED,
+                    f"missing collection {raw_items.path} was {action}",
+                    node.span.location,
+                    severity=DiagnosticSeverity.WARNING,
+                )
+                return self.render_unavailable_repeat(
+                    node,
+                    (*path, -1),
+                    preserve=self.missing_output is MissingOutputPolicy.PRESERVE,
+                )
+            if raw_items is None and self.missing_output is not MissingOutputPolicy.ERROR:
+                action = (
+                    "blanked" if self.missing_output is MissingOutputPolicy.BLANK else "preserved"
+                )
+                source_value = self.compiled.template.cells[
+                    Coordinate(node.rectangle.top, node.rectangle.left)
+                ]
+                if not isinstance(source_value, str):
+                    raise TypeError("repeat opening source cell must contain text")
+                source_tag = source_value[node.span.start : node.span.end]
+                self.diagnostic(
+                    DiagnosticCode.NULL_COLLECTION_RENDERED,
+                    f"null collection in {source_tag} was {action}",
+                    node.span.location,
+                    severity=DiagnosticSeverity.WARNING,
+                )
+                return self.render_unavailable_repeat(
+                    node,
+                    (*path, -1),
+                    preserve=self.missing_output is MissingOutputPolicy.PRESERVE,
+                )
             if raw_items is _EVALUATION_FAILED:
                 items: list[Any] = []
             elif not is_ordered_collection(raw_items):
