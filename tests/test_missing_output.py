@@ -275,3 +275,70 @@ def test_rejects_an_unknown_missing_output_policy() -> None:
 
     with pytest.raises(ValueError, match="missing_output"):
         render_sheet(compiled, {}, missing_output="silent")
+
+
+@pytest.mark.parametrize("filter_name", ["join", "sum", "min", "max", "count"])
+@pytest.mark.parametrize(
+    ("missing_output", "expected_code"),
+    [
+        (MissingOutputPolicy.ERROR, "E1304"),
+        (MissingOutputPolicy.BLANK, "W1302"),
+        (MissingOutputPolicy.PRESERVE, "W1302"),
+    ],
+)
+def test_null_collection_filter_receiver_follows_output_policy(
+    filter_name: str, missing_output: MissingOutputPolicy, expected_code: str
+) -> None:
+    source = f"{{{{  items | {filter_name}  }}}}"
+    compiled = compile_sheet(WorksheetTemplate.from_rows("Report", [[source]])).require()
+
+    result = render_sheet(compiled, {"items": None}, missing_output=missing_output)
+
+    if missing_output is MissingOutputPolicy.ERROR:
+        assert result.plan is None
+    else:
+        expected = None if missing_output is MissingOutputPolicy.BLANK else source
+        assert _values_by_coordinate(result.require()) == {"A1": expected}
+    assert [diagnostic.code.value for diagnostic in result.diagnostics] == [expected_code]
+    assert result.diagnostics[0].severity is (
+        DiagnosticSeverity.ERROR
+        if missing_output is MissingOutputPolicy.ERROR
+        else DiagnosticSeverity.WARNING
+    )
+    assert str(result.diagnostics[0].location) == "Report!A1:0"
+
+
+@pytest.mark.parametrize(
+    "missing_output", [MissingOutputPolicy.BLANK, MissingOutputPolicy.PRESERVE]
+)
+def test_wrong_non_null_collection_filter_receiver_remains_fatal(
+    missing_output: MissingOutputPolicy,
+) -> None:
+    source = "{{ items | join }}"
+    compiled = compile_sheet(WorksheetTemplate.from_rows("Report", [[source]])).require()
+
+    result = render_sheet(compiled, {"items": 7}, missing_output=missing_output)
+
+    assert result.plan is None
+    assert [diagnostic.code for diagnostic in result.diagnostics] == [
+        DiagnosticCode.FILTER_TYPE_MISMATCH
+    ]
+
+
+@pytest.mark.parametrize(
+    ("missing_output", "expected"),
+    [
+        (MissingOutputPolicy.BLANK, "Total: ; name: Acme"),
+        (MissingOutputPolicy.PRESERVE, "Total: {{ items | sum }}; name: Acme"),
+    ],
+)
+def test_null_collection_filter_recovers_only_its_mixed_cell_segment(
+    missing_output: MissingOutputPolicy, expected: str
+) -> None:
+    source = "Total: {{ items | sum }}; name: {{ name }}"
+    compiled = compile_sheet(WorksheetTemplate.from_rows("Report", [[source]])).require()
+
+    result = render_sheet(compiled, {"items": None, "name": "Acme"}, missing_output=missing_output)
+
+    assert _values_by_coordinate(result.require()) == {"A1": expected}
+    assert [diagnostic.code.value for diagnostic in result.diagnostics] == ["W1302"]

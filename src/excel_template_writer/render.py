@@ -31,6 +31,7 @@ from excel_template_writer.expressions import (
     FilterTypeError,
     MissingValueError,
     NonFiniteExpressionNumberError,
+    NullCollectionError,
     evaluate_expression,
 )
 from excel_template_writer.limits import (
@@ -50,7 +51,7 @@ from excel_template_writer.values import (
 
 
 class MissingOutputPolicy(StrEnum):
-    """Choose how missing values in output tags are rendered."""
+    """Choose how missing outputs and unavailable collections are rendered."""
 
     ERROR = "error"
     BLANK = "blank"
@@ -318,6 +319,35 @@ class _Renderer:
                         part.span.location,
                     )
                     value = None
+            except NullCollectionError as error:
+                if self.missing_output is MissingOutputPolicy.ERROR:
+                    self.diagnostic(
+                        DiagnosticCode.FILTER_TYPE_MISMATCH,
+                        str(error),
+                        part.span.location,
+                    )
+                    value = None
+                else:
+                    action = (
+                        "blanked"
+                        if self.missing_output is MissingOutputPolicy.BLANK
+                        else "preserved"
+                    )
+                    self.diagnostic(
+                        DiagnosticCode.NULL_COLLECTION_RENDERED,
+                        f"null collection {error.path} was {action}",
+                        part.span.location,
+                        severity=DiagnosticSeverity.WARNING,
+                    )
+                    if self.missing_output is MissingOutputPolicy.BLANK:
+                        value = None
+                    else:
+                        source_value = self.compiled.template.cells[cell.coordinate]
+                        if not isinstance(source_value, str):
+                            raise TypeError(
+                                "output expression source cell must contain text"
+                            ) from error
+                        value = source_value[part.span.start : part.span.end]
             except FilterTypeError as error:
                 self.diagnostic(
                     DiagnosticCode.FILTER_TYPE_MISMATCH,
