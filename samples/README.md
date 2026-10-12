@@ -26,7 +26,7 @@ When the optional dependency is absent, the generator prints one Polars skip mes
 | Python module | Generated workbooks | Current features demonstrated |
 | --- | --- | --- |
 | `samples.scalar_values` | `scalar_values_template.xlsx`, `scalar_values_output.xlsx` | Native scalar cells, exact float round trips, supported 15-digit Decimal amounts and authored decimal display scale, mixed text, mapping access, native dates versus textual `date`, numeric `sum`/`min`/`max`, record and non-null `count`, basic arithmetic with precedence and unary signs, plus `upper`, `join`, and `default` filters |
-| `samples.missing_output_policies` | `missing_output_policies_template.xlsx`, `missing_output_policies_output.xlsx` | Strict `error`, tolerant `blank`, and exact-tag `preserve` handling for missing output values; `W1301` warnings, mixed text, `default` precedence, present nulls, and formatted blanks |
+| `samples.missing_output_policies` | `missing_output_policies_template.xlsx`, `missing_output_policies_output.xlsx` | Strict `error`, tolerant `blank`, and exact-tag `preserve` handling for missing outputs, null collection filters, and missing or null repeats; `W1301`/`W1302` warnings, mixed text, `default` precedence, styled rectangles, and merges |
 | `samples.repeated_blocks` | `repeated_blocks_template.xlsx`, `repeated_blocks_output.xlsx` | One-cell lists, styled rectangular table rows, row shifting, formatted blanks, directive-only cell fill/border preservation, merged footers, and empty-repeat placeholders |
 | `samples.default_cell_style` | `default_cell_style_template.xlsx`, `default_cell_style_output.xlsx` | Workbook default white fill for absent blank cells, per-sheet 80% zoom preservation, static text above three expanding tables, direct white-fill and explicit no-fill controls, and directive-only fill/border preservation |
 | `samples.conditions_and_nesting` | `conditions_and_nesting_template.xlsx`, `conditions_and_nesting_output.xlsx` | `if`/`else`, no-`else` conditions, boolean expressions, nested repeats, lexical scope, and bottom-up measurement |
@@ -63,10 +63,11 @@ uv run --all-extras python -m samples.scalar_values
 uv run --all-extras python -m samples.polars_dataframe
 ```
 
-The committed `missing_output_policies_output.xlsx` workbook uses `preserve` so unresolved tags and
-their exact authored spacing remain visible. Its generator also renders temporary `error` and
-`blank` variants to verify that strict mode publishes no workbook, while blank mode publishes a
-formatted blank plus nonfatal `W1301` diagnostics.
+The committed `missing_output_policies_output.xlsx` workbook uses `preserve` so unresolved output
+tags and complete repeat rectangles remain visible with their exact authored text. Its generator
+also renders temporary `error` and `blank` variants to verify that strict mode publishes no
+workbook, while blank mode publishes formatted blank tags and repeat rectangles with nonfatal
+`W1301` and `W1302` diagnostics.
 
 The `default_cell_style` pair keeps gridlines enabled and the worksheet zoom at 80%. Its blank band
 `B6:H11` has no individual cell records and inherits white from the workbook default style

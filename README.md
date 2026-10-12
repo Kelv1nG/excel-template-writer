@@ -49,8 +49,8 @@ plan = render_sheet(
 
 Compilation and rendering return structured diagnostics; `.require()` raises an exception only when a caller prefers exception-based control flow.
 
-Missing values in output tags are errors by default. Callers rendering intentionally incomplete
-data can select a narrow output policy without suppressing any other error:
+Missing values in output tags and unavailable `for` collections are errors by default. Callers
+rendering intentionally incomplete data can select a recovery policy:
 
 ```python
 from excel_template_writer import MissingOutputPolicy
@@ -61,15 +61,18 @@ rendering = render_sheet(
     missing_output=MissingOutputPolicy.BLANK,
 )
 plan = rendering.require()
-warnings = rendering.diagnostics  # W1301 for each recovered output tag
+warnings = rendering.diagnostics  # W1301/W1302 for recovered tags or repeats
 ```
 
-`BLANK` writes a blank for the missing tag. `PRESERVE` writes the exact original `{{ ... }}` tag,
-including its braces and spacing, which is useful for visibly unfinished workbooks. In a mixed cell,
-only the missing segment is blanked or preserved. A compound expression is handled as one complete
-tag, and `default(...)` still takes precedence. Present nulls behave as before; missing `for`
-collections and `if` conditions remain errors, as do all non-missing failures. The string values
-`"blank"` and `"preserve"` are accepted as conveniences; `"error"` is the default.
+`BLANK` writes a blank for the missing tag; `PRESERVE` writes the exact original `{{ ... }}` tag,
+including its braces and spacing. In a mixed cell, only the failed segment changes. A compound
+expression is handled as one complete tag, and `default(...)` still takes precedence. If a `for`
+collection is missing or null, `BLANK` blanks its entire authored rectangle and `PRESERVE` keeps
+that rectangle's original cell values. Both retain its size, formatting, and merges without
+evaluating its body. A null receiver of `join`, `sum`, `min`, `max`, or `count` inside an output tag
+is also recoverable as a whole tag. Recovered missing values warn with `W1301`; recovered null
+collections warn with `W1302`. Missing `if` conditions and wrong non-null collection types remain
+errors. The string values `"blank"` and `"preserve"` are accepted; `"error"` is the default.
 
 Table-shaped collections support the scalar reducers `sum`, `min`, `max`, and `count`, each with an
 optional literal record-column name. Numeric expressions also support unary signs and `+`, `-`,
@@ -172,8 +175,8 @@ template cell has format `0.00`. Apply business rounding before rendering; unsup
 Decimals fail explicitly. See [numeric output guidance](docs/directives.md#numeric-output) and
 the [maintained scalar and Polars samples](samples/README.md).
 
-Recovered missing output tags produce nonfatal `W1301` warning diagnostics and do not prevent a
-plan or workbook from being returned successfully. The workbook entry point accepts the same
+Recovered output tags and repeats produce nonfatal `W1301` or `W1302` warnings and do not prevent
+a plan or workbook from being returned successfully. The workbook entry point accepts the same
 `missing_output=MissingOutputPolicy.BLANK` (or `MissingOutputPolicy.PRESERVE`) argument shown for
 `render_sheet`; omitting it keeps the strict `MissingOutputPolicy.ERROR` default.
 
