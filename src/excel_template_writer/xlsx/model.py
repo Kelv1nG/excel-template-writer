@@ -25,6 +25,16 @@ class CellPresentation:
 
 
 @dataclass(frozen=True)
+class NormalStylePresentation:
+    font: Any
+    fill: Any
+    border: Any
+    alignment: Any
+    number_format: str
+    protection: Any
+
+
+@dataclass(frozen=True)
 class DimensionPresentation:
     has_explicit_style: bool
     hidden: bool
@@ -149,3 +159,4 @@ class WorkbookSnapshot:
     properties: Any
     loaded_theme: bytes | None
     default_cell_style: CellPresentation
+    normal_style: NormalStylePresentation

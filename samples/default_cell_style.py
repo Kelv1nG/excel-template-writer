@@ -105,7 +105,7 @@ def build_template(path: Path = TEMPLATE_PATH) -> Path:
 
 
 def _assert_implicit_white_band(path: Path) -> None:
-    """Verify the serialized default fill and absence of blank-cell records.
+    """Verify both workbook defaults and the absence of blank-cell records.
 
     Args:
         path: Template or rendered workbook to inspect without materializing cells.
@@ -116,16 +116,23 @@ def _assert_implicit_white_band(path: Path) -> None:
         sheet = ET.fromstring(archive.read("xl/worksheets/sheet1.xml"))
     fills = styles.find("s:fills", NS)
     cell_styles = styles.find("s:cellXfs", NS)
+    named_styles = styles.find("s:cellStyles", NS)
+    named_xfs = styles.find("s:cellStyleXfs", NS)
     assert fills is not None and cell_styles is not None
-    default_fill = fills[int(cell_styles[0].get("fillId", "0"))].find("s:patternFill", NS)
-    assert default_fill is not None
-    assert default_fill.get("patternType") == "solid"
-    foreground = default_fill.find("s:fgColor", NS)
-    assert foreground is not None and foreground.get("rgb") == WHITE
+    assert named_styles is not None and named_xfs is not None
+    normal_ref = next(style for style in named_styles if style.get("builtinId") == "0")
+    normal_xf_id = normal_ref.get("xfId")
+    assert normal_xf_id is not None
+    for xf in (cell_styles[0], named_xfs[int(normal_xf_id)]):
+        default_fill = fills[int(xf.get("fillId", "0"))].find("s:patternFill", NS)
+        assert default_fill is not None
+        assert default_fill.get("patternType") == "solid"
+        foreground = default_fill.find("s:fgColor", NS)
+        assert foreground is not None and foreground.get("rgb") == WHITE
     stored_cells = {cell.attrib["r"] for cell in sheet.findall("s:sheetData/s:row/s:c", NS)}
     blank_band = {f"{column}{row}" for row in range(6, 12) for column in "BCDEFGH"}
     assert blank_band.isdisjoint(stored_cells)
-    # Without row/column overrides, every absent coordinate uses cellXfs[0].
+    # Row/column overrides would change the effective appearance of absent cells.
     assert all("s" not in row.attrib for row in sheet.findall("s:sheetData/s:row", NS))
     assert all("style" not in column.attrib for column in sheet.findall("s:cols/s:col", NS))
 
