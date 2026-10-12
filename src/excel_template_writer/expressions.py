@@ -44,6 +44,21 @@ class FilterTypeError(ExpressionEvaluationError):
     """A runtime value has the wrong canonical type for a compiled filter."""
 
 
+class NullCollectionError(FilterTypeError):
+    """A collection filter received a present null rather than an ordered collection."""
+
+    def __init__(self, filter_name: str, path: str) -> None:
+        """Record the filter and canonical path for a recoverable null receiver.
+
+        Args:
+            filter_name: Collection filter that received null.
+            path: Display path of the null collection receiver.
+        """
+
+        self.path = path
+        super().__init__(f"filter {filter_name!r} requires an ordered collection; {path} is null")
+
+
 class ArithmeticTypeError(ExpressionEvaluationError):
     """A runtime value has the wrong canonical type for numeric arithmetic."""
 
@@ -1134,6 +1149,15 @@ def _evaluate(expression: Expression, scope: Mapping[str, Any]) -> Any:
             return str(value).upper()
         if expression.name == "lower":
             return str(value).lower()
+        if expression.name in {"join", "sum", "min", "max", "count"}:
+            if value is None:
+                _, path = _root_path(expression.value)
+                raise NullCollectionError(expression.name, path)
+            if not isinstance(value, (list, tuple)):
+                raise FilterTypeError(
+                    f"filter {expression.name!r} requires an ordered collection; "
+                    f"received {type(value).__name__}"
+                )
         if expression.name == "join":
             separator = str(arguments[0]) if arguments else ", "
             return separator.join(str(item) for item in value)

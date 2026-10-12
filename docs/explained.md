@@ -303,17 +303,20 @@ Each `ExpressionPart` is evaluated against the current lexical scope.
 - A missing value is an error by default; `default`, the special empty-repeat placeholder behavior,
   or a tolerant output policy may handle it under their narrower contracts.
 
-`MissingOutputPolicy` is applied only when an unhandled `MissingValueError` reaches one
-`ExpressionPart`, corresponding to one complete `{{ ... }}` tag. `error` emits fatal `E1301` and is
-the default. `blank` supplies `None` for a sole-expression cell or an empty segment during mixed-text
-assembly. `preserve` slices the exact original tag substring from the source cell using the token
-span. The latter two policies emit nonfatal `W1301` and allow the plan to succeed.
+`MissingOutputPolicy` applies when an unhandled `MissingValueError` reaches an `ExpressionPart` or
+`ForNode`, or a null collection reaches a `ForNode` or collection filter in an output tag. `error`
+keeps the existing fatal diagnostic: `E1301` for missing, `E1303` for a null repeat, or `E1304` for
+a null collection filter receiver. At an output tag, `blank` supplies `None` for a sole-expression
+cell or an empty segment during mixed-text assembly. `preserve` slices the exact original tag
+substring from the source cell using the token span. Both warn with `W1301` for missing or `W1302`
+for null collections and allow a warning-only plan to succeed.
 
 This output-part boundary is important. A compound expression is blanked or preserved as a whole,
 and one failed tag in a mixed cell does not replace its literal neighbors or successful tags.
 `default` catches missing during expression evaluation before the boundary, so it wins over the
-policy and emits no warning. Present nulls never become missing. Other evaluator exceptions retain
-their own fatal diagnostics instead of passing through this recovery path.
+policy and emits no warning. Direct output of a present null is an ordinary blank cell. Other
+evaluator exceptions retain their own fatal diagnostics instead of passing through this recovery
+path.
 
 Filter input types are checked during evaluation because the same compiled workbook can be rendered
 with different contexts. For `date`, native dates and datetimes are accepted, while strings,
@@ -353,9 +356,13 @@ declared column band.
 
 ### Repeat evaluation
 
-For a `ForNode`, the renderer evaluates the collection expression. A missing collection remains
-fatal `E1301` under every missing-output policy; control expressions are not output parts and
-silently treating one as empty would change layout. For each present collection item the renderer:
+For a `ForNode`, the renderer evaluates the collection expression. A missing or present-null
+collection is unavailable. Under `blank` or `preserve`, the renderer emits one block with the exact
+source rectangle size. It blanks or copies every authored material cell, respectively, while
+retaining source presentation and contained merges. No descendant is evaluated, and surrounding
+cells keep their positions under all shift modes. The recovery warns at the opening directive with
+`W1301` for missing or `W1302` for null. A present empty collection uses the separate empty-repeat
+placeholder rule. For each present collection item the renderer:
 
 1. creates a child scope containing the loop variable;
 2. renders the complete source rectangle in that scope;
@@ -446,19 +453,19 @@ rendering = render_sheet(
     missing_output=MissingOutputPolicy.BLANK,
 )
 plan = rendering.require()
-warnings = rendering.diagnostics  # Nonfatal W1301 entries remain observable.
+warnings = rendering.diagnostics  # Nonfatal W1301/W1302 entries remain observable.
 ```
 
 Compilation produces no AST on error. Rendering produces no plan on error. Warning-only rendering,
-including recovered missing output tags under `blank` or `preserve`, returns both the complete plan
+including recovered output tags and repeats under `blank` or `preserve`, returns both the complete plan
 and its diagnostics. A production workbook writer must be invoked only after a complete plan exists,
 so invalid templates cannot leave a partially rendered workbook presented as success.
 
 Current diagnostics cover lexical errors, invalid directives, expressions, filters and date
 formats, unmatched or ambiguous markers, invalid geometry, partial overlap, invalid context values,
 missing data, filter and scalar/collection type mistakes, row-shift conflicts, and destination
-collisions. `E1301` is fatal missing data; `W1301` records an output tag recovered by the explicit
-missing-output policy. Worksheet diagnostics carry sheet/cell locations; canonical-value
+collisions. `E1301` is fatal missing data; `W1301` records recovered missing data and `W1302`
+records recovered null collections. Worksheet diagnostics carry sheet/cell locations; canonical-value
 diagnostics carry context paths.
 
 ## The XLSX boundary

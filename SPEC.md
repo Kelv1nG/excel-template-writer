@@ -24,9 +24,9 @@ The language is declarative and Jinja-like, but its execution model is spatial. 
 - Vertical repeats insert complete rows by default. Authors can select isolated cell shifting or
   fixed no-shift placement explicitly.
 - An empty repeat retains one blank formatted instance of its source block.
-- Missing output values are errors by default. A render-scoped policy may instead blank or preserve
-  only output tags whose evaluation raises an unhandled missing-value error, with a warning for
-  every recovered tag.
+- Missing values and unavailable collections are errors by default. A render-scoped policy may
+  instead blank or preserve an output tag with an unhandled missing value, or a repeat whose
+  collection is missing or null, with a warning for every recovered occurrence.
 - Conditions are required in the first usable language release.
 - The first usable release supports vertical (`down`) repetition; horizontal repetition follows after the vertical model is proven.
 - Conditional branches are vertically stacked, equal-width rectangles in the first usable release.
@@ -90,8 +90,9 @@ The engine must parse and validate the complete template and compute the output 
 ### 5.5 Fail visibly
 
 Ambiguous geometry, overlapping regions, illegal merges, missing values, and collisions are errors
-by default. The explicit missing-output policy in section 9.7 may recover only an unhandled missing
-value in an output tag; it does not suppress any other failure. Silent overwriting is not permitted.
+by default. The explicit policy in section 9.7 may recover an unhandled missing output tag, an
+unavailable repeat collection, or a null collection-filter receiver. It does not suppress any other
+failure. Silent overwriting is not permitted.
 
 ## 6. Template authoring model
 
@@ -295,9 +296,9 @@ An empty collection retains exactly one instance of the source block.
 A later explicit `empty` branch may replace this default instance with content such as “No records.”
 
 This rule applies only when the controlling expression successfully evaluates to a present, empty
-ordered collection. A missing `for` collection is an error under every `MissingOutputPolicy`; it is
-never inferred to mean an empty collection. A present `null` or another non-collection value remains
-a collection-type error.
+ordered collection. A missing or present-null `for` collection is unavailable, not empty: section
+9.7 governs its recovery under `MissingOutputPolicy`. A present non-null value of the wrong type
+remains a collection-type error under every policy.
 
 ### 8.7 Layout planning
 
@@ -481,13 +482,14 @@ the authored fallback and no missing-output diagnostic. A present `null` remains
 select the fallback. This preserves the distinction between missing data and present-but-null data.
 
 An unhandled `MissingValueError` raised while evaluating a `{{ ... }}` output tag is governed by the
-render-scoped `MissingOutputPolicy`:
+render-scoped `MissingOutputPolicy`. The same policy governs an unavailable `for` collection and a
+present-null receiver of a collection filter:
 
-| Value | Output-tag behavior |
-| --- | --- |
-| `error` | The default. Emit `E1301 MISSING_VALUE`; the render has an error and returns no successful plan or workbook. |
-| `blank` | Replace the failed output tag with a blank value and emit nonfatal `W1301 MISSING_VALUE_RENDERED`. |
-| `preserve` | Replace the failed output tag with its exact original source substring, including its braces and authored spacing, and emit nonfatal `W1301 MISSING_VALUE_RENDERED`. |
+| Value | Missing output tag | Unavailable `for` collection | Null collection-filter receiver |
+| --- | --- | --- | --- |
+| `error` | Fatal `E1301 MISSING_VALUE` | Fatal `E1301` if missing, or `E1303 EXPECTED_COLLECTION` if null | Fatal `E1304 FILTER_TYPE_MISMATCH` |
+| `blank` | Blank the failed tag; warn `W1301 MISSING_VALUE_RENDERED` | Blank its exact source rectangle in place; warn `W1301` if missing or `W1302 NULL_COLLECTION_RENDERED` if null | Blank the complete output tag; warn `W1302` |
+| `preserve` | Keep the exact authored tag substring; warn `W1301` | Keep its exact authored source rectangle in place; warn `W1301` if missing or `W1302` if null | Keep the exact authored output tag; warn `W1302` |
 
 The policy is applied to one complete output tag at a time:
 
@@ -501,12 +503,30 @@ The policy is applied to one complete output tag at a time:
   Excel cell while retaining the source cell's presentation. `preserve` assigns the exact tag
   substring as text.
 
-The policy catches only `MissingValueError` at an output-tag boundary. Missing values in controlling
-expressions such as a `for` collection or an `if` condition remain `E1301` errors under all three
-policies because treating them as empty or false would silently change layout. Invalid syntax,
-unknown filters, filter and arithmetic type errors, division by zero, non-finite results, collection
-misuse, layout failures, and every other non-missing error remain fatal. The empty-repeat placeholder
-behavior in section 8.5 is separate and does not produce `W1301` for its deliberately absent item.
+An unavailable `for` collection is one whose controlling expression raises `MissingValueError`, or
+whose evaluated value is canonical `null`. Under `blank` or `preserve`, it produces exactly one block
+with the width and height of its authored source rectangle, without inserting, removing, or shifting
+rows or cells under any shift mode. `blank` assigns `None` to every authored material cell in that
+rectangle, including static text and structural tags. `preserve` copies each cell's exact authored
+value, including all directive and output tags. Both retain corresponding source-cell presentation,
+row and column presentation, contained merges, and sparse blank cells. No descendant expression or
+structural node is evaluated. A recovered child repeat inside a successful parent repeat is placed
+once per parent instance and warns once per recovered occurrence at the opening directive's source
+location. Recovery does not relax resource limits, collision checks, or workbook-feature boundaries.
+
+For `join`, `sum`, `min`, `max`, and `count`, a canonical-null receiver is recoverable only when the
+filter is inside an output tag under `blank` or `preserve`. Recovery applies to the complete tag.
+A missing receiver continues through ordinary missing-output handling. A non-null receiver of the
+wrong type and invalid collection members remain fatal filter errors. Directly rendering a present
+`null` remains an ordinary blank cell without a warning; a present empty collection retains each
+filter's existing result without a warning.
+
+Missing values in `if` conditions remain fatal `E1301` under every policy; a present-null condition
+keeps its existing falsey behavior. Invalid syntax, unknown filters, other filter and arithmetic
+type errors, division by zero, non-finite results, collection misuse, layout failures, and every
+other non-missing error remain fatal. The empty-repeat placeholder behavior in section 8.6 is
+separate and does not produce a recovery warning for its deliberately absent item. Any independent
+error still prevents publication even when another tag or repeat was recovered.
 
 ## 10. Expression language
 
@@ -1013,10 +1033,12 @@ Evaluation produces a render/layout IR rather than immediately writing cells. Th
 
 Evaluates expressions against lexical scopes. A loop adds its item variable and loop metadata to a child scope without mutating its parent.
 
-The evaluator applies `MissingOutputPolicy` only after an unhandled `MissingValueError` reaches an
-`OutputNode`. This boundary lets `default` consume missing values first, preserves whole-tag
-recovery for compound expressions, and prevents the policy from affecting `ForNode` or `IfNode`
-control flow.
+The evaluator applies `MissingOutputPolicy` after an unhandled `MissingValueError` or a null
+collection-filter receiver reaches an `OutputNode`. This boundary lets `default` consume missing
+values first and preserves whole-tag recovery for compound expressions. For a `ForNode`, the
+renderer distinguishes a missing collection, a present-null collection, and a wrong non-null type
+before evaluating its descendants; the first two may produce an identity-sized recovery block.
+The policy never selects an `IfNode` branch for a missing condition.
 
 Suggested loop metadata:
 
@@ -1150,6 +1172,7 @@ Examples:
 - `E1205 PARTIAL_BLOCK_OVERLAP`
 - `E1301 MISSING_VALUE`
 - `W1301 MISSING_VALUE_RENDERED`
+- `W1302 NULL_COLLECTION_RENDERED`
 - `E1302 COLLECTION_IN_SCALAR_CELL`
 - `E1304 FILTER_TYPE_MISMATCH`
 - `E1305 ARITHMETIC_TYPE_MISMATCH`
@@ -1187,7 +1210,7 @@ whose authored destination merges do not exactly match the source body's transla
 Rendering is atomic with respect to errors: any error prevents an output workbook from being
 returned as successful. Warnings do not prevent a plan or workbook from being returned. A render
 using `MissingOutputPolicy.BLANK` or `.PRESERVE` therefore succeeds when its only diagnostics are
-`W1301` warnings produced by recovered output tags.
+`W1301` or `W1302` warnings produced by recovered output tags or repeats.
 
 ## 17. Security
 
@@ -1226,6 +1249,7 @@ still bounding accidental or hostile input:
 
 The root context mapping has depth zero. Context-node and container limits apply after adapter
 conversion to the canonical tree. An empty-repeat placeholder counts as one repeat iteration.
+An unavailable repeat recovered as one source-sized block also counts as one repeat iteration.
 Planned-cell totals include material blank cells retained for formatting.
 
 The XLSX format's absolute bounds are separate and cannot be raised or disabled: 1,048,576 rows,
@@ -1277,8 +1301,8 @@ A compiled template may be cacheable if it does not retain mutable `openpyxl` ob
 - name scope and type tests
 - all missing-output policies for sole, mixed, multiple, and compound output tags
 - exact source-tag preservation, including noncanonical interior spacing
-- `default` precedence, present-null behavior, strict `for`/`if` control expressions, and `W1301`
-  warning severity and source locations
+- `default` precedence, missing and null collection recovery, strict `if` conditions, and `W1301`
+  and `W1302` warning severity and source locations
 
 ### 19.2 Layout tests
 
@@ -1288,13 +1312,15 @@ A compiled template may be cacheable if it does not retain mutable `openpyxl` ob
 - nested blocks
 - side-by-side blocks
 - empty and singleton collections
+- source-sized blank and preserved unavailable repeats under every shift mode, including nested cases
 - cell, row, and column expansion
 - collision detection
 - merged-range transforms
 - fixed no-shift placement into styled and default blank destinations
 - occupied fixed-footprint collisions and exact prepared merge compatibility
 - preservation of destination presentation and row properties
-- successful planning with missing-output warnings and fatal handling of every non-missing error
+- successful planning with missing-output and null-collection warnings, plus fatal handling of
+  independent errors
 
 Most layout tests should operate without `openpyxl`.
 

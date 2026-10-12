@@ -44,6 +44,36 @@ def test_default_filter_handles_missing_values_explicitly() -> None:
     assert evaluate_expression(expression, {"invoice": {}}) == "-"
 
 
+@pytest.mark.parametrize("filter_name", ["join", "sum", "min", "max", "count"])
+def test_null_collection_filter_receiver_has_a_distinct_failure(filter_name: str) -> None:
+    expression = compile_expression(f"items | {filter_name}")
+
+    with pytest.raises(FilterTypeError) as captured:
+        evaluate_expression(expression, {"items": None})
+
+    assert type(captured.value).__name__ == "NullCollectionError"
+
+
+@pytest.mark.parametrize("filter_name", ["join", "sum", "min", "max", "count"])
+def test_collection_filters_reject_wrong_non_null_receivers(filter_name: str) -> None:
+    expression = compile_expression(f"items | {filter_name}")
+
+    with pytest.raises(FilterTypeError, match="requires an ordered collection"):
+        evaluate_expression(expression, {"items": 7})
+
+
+@pytest.mark.parametrize(
+    ("filter_name", "expected"),
+    [("join", ""), ("sum", 0), ("min", None), ("max", None), ("count", 0)],
+)
+def test_collection_filters_keep_empty_collection_results(
+    filter_name: str, expected: object
+) -> None:
+    assert (
+        evaluate_expression(compile_expression(f"items | {filter_name}"), {"items": []}) == expected
+    )
+
+
 def test_access_to_private_mapping_members_is_forbidden() -> None:
     expression = parse_expression("invoice._internal")
 

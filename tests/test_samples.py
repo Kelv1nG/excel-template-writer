@@ -52,12 +52,18 @@ def test_committed_sample_workbook_pairs_are_valid_and_rendered(stem: str) -> No
             if isinstance(cell.value, str)
         ]
         assert any("{%" in value or "{{" in value for value in template_text)
-        assert all("{%" not in value for value in output_text)
         if stem == "missing_output_policies":
-            assert "{{  customer.email  }}" in output_text
-            assert "Contact: {{  customer.email  }}" in output_text
+            assert {value for value in output_text if "{%" in value or "{{" in value} == {
+                "{{  customer.email  }}",
+                "Contact: {{  customer.email  }}",
+                "{{ null_rows | sum }}",
+                '{% for row in tables["some_table"] %}{{ row.name }}',
+                "{% for row in null_rows %}{{ row.name }}",
+                "{{ row.amount }}",
+                "{% endfor %}",
+            }
         else:
-            assert all("{{" not in value for value in output_text)
+            assert all("{%" not in value and "{{" not in value for value in output_text)
     finally:
         template.close()
         output.close()

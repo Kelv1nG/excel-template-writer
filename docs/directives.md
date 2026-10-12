@@ -59,8 +59,8 @@ A collection cannot be written directly to a scalar cell. Use a `for` block to r
 ### Missing output values
 
 A missing name, mapping property, or index is different from a present `null`. By default, an
-unhandled missing value in an output tag reports `E1301` and the render returns no plan or workbook.
-The caller may set `missing_output` to one of three `MissingOutputPolicy` values:
+unhandled missing value reports `E1301` and the render returns no plan or workbook. The caller may
+set `missing_output` to one of three `MissingOutputPolicy` values:
 
 | Policy | Result for a missing `{{ ... }}` output tag |
 | --- | --- |
@@ -98,10 +98,21 @@ Use `default(...)` when the template author knows the intended fallback:
 `default` consumes the missing value before the output policy, so it produces the fallback without
 `W1301`. A present `null` does not select the fallback and otherwise keeps its existing behavior.
 
-This policy applies only to unhandled missing values at an output-tag boundary. A missing collection
-in `{% for ... %}` and a missing condition in `{% if ... %}` always report fatal `E1301`; treating
-them as empty or false would silently alter layout. Invalid filters, wrong runtime types, division by
-zero, layout collisions, and all other non-missing errors also remain fatal.
+The same policy handles an unavailable `{% for ... %}` collection: an absent name, key, or index,
+or a present `null` collection. `error` reports fatal `E1301` for missing and `E1303` for null.
+`blank` produces one source-sized block with every authored material cell blank; `preserve` keeps
+every cell's exact authored value, including directive and output tags. Both retain formatting,
+merges, and neighboring cell positions under every shift mode. The body is not evaluated. A missing
+collection warns with `W1301`; a null collection warns with `W1302` at the opening directive.
+This differs from a present empty collection, which uses the ordinary empty-repeat placeholder.
+
+A present `null` receiver of `join`, `sum`, `min`, `max`, or `count` in an output tag follows the
+whole-tag `blank` or `preserve` behavior and warns with `W1302`. Under `error`, it remains fatal
+`E1304`. A missing receiver follows the ordinary missing-value path, while a wrong non-null type
+remains fatal. Directly rendering a present `null` remains an ordinary blank cell without a warning.
+
+A missing condition in `{% if ... %}` always reports fatal `E1301`. Invalid filters, wrong runtime
+types, division by zero, layout collisions, and other non-missing errors also remain fatal.
 
 Configure the policy per render; it is not template syntax:
 
@@ -461,8 +472,9 @@ B4: Formatted placeholder{% endfor %}
 an empty `items` collection produces a blank `A4` and the literal text `Formatted placeholder` in `B4`.
 
 This placeholder rule is special to expressions rooted at the deliberately absent item and produces
-no `W1301`. A missing value in another body output tag follows `missing_output`; a missing controlling
-collection always remains fatal `E1301`. There is no `{% empty %}` branch yet.
+no `W1301`. A missing value in another body output tag follows `missing_output`; a missing or null
+controlling collection follows the unavailable-repeat recovery rule above. There is no `{% empty %}`
+branch yet.
 
 ### `shift="rows"`
 
@@ -746,7 +758,8 @@ compilation. Loops accept `rows`, `cells`, or `none`; regions accept only `rows`
 | `E1204` | Marker is not at the required cell-token boundary |
 | `E1205` | Partially overlapping blocks |
 | `E1301` | Missing value during rendering |
-| `W1301` | Missing value in an output tag was blanked or preserved by `missing_output` |
+| `W1301` | Missing value in an output tag or repeat was blanked or preserved by `missing_output` |
+| `W1302` | Null collection in a filter output tag or repeat was blanked or preserved by `missing_output` |
 | `E1302` | Collection used as a scalar cell value |
 | `E1303` | `for` expression did not produce a supported collection |
 | `E1304` | Runtime value has the wrong type for a compiled filter |
